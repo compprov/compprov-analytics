@@ -1,5 +1,5 @@
-#### Summary
-**Verdict**: $VERDICT$
-**Confidence score**: $SCORE$
+# Summary
+- **Verdict**: $VERDICT$
+- **Confidence score**: $SCORE$
 
 $MARKDOWN$
