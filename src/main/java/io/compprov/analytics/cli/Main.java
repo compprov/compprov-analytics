@@ -429,8 +429,11 @@ public class Main {
                 path + "/chrono-violations.json");
 
         //llm prompts
+        final var rootIds = formatIdList(roots);
+        final var leafIds = formatIdList(leaves);
+        final var multiUsedIds = formatIdList(multiused);
         for (var prompt : Prompt.values()) {
-            final var r = processPrompt(path, snapshotStr, prompt);
+            final var r = processPrompt(path, snapshotStr, prompt, rootIds, leafIds, multiUsedIds);
             if (r.isPresent()) {
                 result.addLlmResult(prompt, r.get());
             }
@@ -459,11 +462,23 @@ public class Main {
         }
     }
 
-    private static Optional<PromptProcessingResult> processPrompt(String path, String snapshotStr, Prompt prompt) {
+    private static String formatIdList(java.util.List<Snapshot.Variable> variables) {
+        if (variables.isEmpty()) {
+            return "[] (none detected)";
+        }
+        return variables.stream()
+                .map(v -> v.track().getId())
+                .collect(java.util.stream.Collectors.joining(", ", "[", "]"));
+    }
+
+    private static Optional<PromptProcessingResult> processPrompt(String path, String snapshotStr, Prompt prompt,
+                                                                  String rootIds, String leafIds, String multiUsedIds) {
 
         String promptText;
         try {
-            promptText = (chatModel == null) ? prompt.markdownPromptTemplate(snapshotStr) : prompt.jsonPromptTemplate(snapshotStr);
+            promptText = (chatModel == null)
+                    ? prompt.markdownPromptTemplate(snapshotStr)
+                    : prompt.jsonPromptTemplate(snapshotStr, rootIds, leafIds, multiUsedIds);
             save(promptText, path + "/" + prompt.promptFilename());
         } catch (IOException e) {
             throw new IllegalStateException("Unable to create prompt: " + prompt.getDescription(), e);
@@ -488,26 +503,14 @@ public class Main {
                 result = ENV.getMapper().readValue(resultStr, PromptProcessingResult.class);
             } catch (Throwable ex) {
                 LOGGER.log(Level.WARNING, "Unable to parse response as JSON", ex);
-                LOGGER.warning("trying to cleanup manually");
 
-                int verdict = resultStr.indexOf("\"verdict\"");
-                if (verdict < 0) {
-                    LOGGER.log(Level.SEVERE, "Unable to re-parse response as JSON. Response saved into " + prompt.jsonResultFilename(), ex);
-                    return Optional.empty();
-                }
-
-                int markdownreport = resultStr.indexOf("\"markdown_report\"");
-                if (markdownreport < 0) {
-                    LOGGER.log(Level.SEVERE, "Unable to re-parse response as JSON. Response saved into " + prompt.jsonResultFilename(), ex);
-                    return Optional.empty();
-                }
-
-                String properJsonStr = "{ " + resultStr.substring(verdict, markdownreport) + "\"markdown_report\": \"failed to parse, see json output for details\" }";
-                try {
-                    result = ENV.getMapper().readValue(properJsonStr, PromptProcessingResult.class);
-                } catch (Throwable ex2) {
-                    LOGGER.log(Level.SEVERE, "Unable to re-parse response as JSON. Response saved into " + prompt.jsonResultFilename(), ex2);
-                    return Optional.empty();
+                result = tryExtractMarkdownedJson(resultStr);
+                if (result == null) {
+                    result = tryExtractJsonByFields(resultStr);
+                    if (result == null) {
+                        LOGGER.log(Level.SEVERE, "Unable to re-parse response as JSON. Response saved into " + prompt.jsonResultFilename(), ex);
+                        return Optional.empty();
+                    }
                 }
             }
 
@@ -520,6 +523,51 @@ public class Main {
             return Optional.of(result);
         } catch (Throwable e) {
             throw new IllegalStateException("Unable to process prompt: " + prompt.getDescription(), e);
+        }
+    }
+
+    private static PromptProcessingResult tryExtractJsonByFields(String resultStr) {
+        try {
+            final var verdict = resultStr.indexOf("\"verdict\"");
+            if (verdict < 0) {
+                return null;
+            }
+
+            final var markdownreport = resultStr.indexOf("\"markdown_report\"");
+            if (markdownreport < 0) {
+                return null;
+            }
+
+            final var properJsonStr = "{ " + resultStr.substring(verdict, markdownreport) + "\"markdown_report\": \"failed to parse, see json output for details\" }";
+            final var r = ENV.getMapper().readValue(properJsonStr, PromptProcessingResult.class);
+            LOGGER.info("Processed output manually, extracted payload without detailed report, but raw response is saved");
+            return r;
+        } catch (Throwable throwable) {
+            return null;
+        }
+    }
+
+    private static PromptProcessingResult tryExtractMarkdownedJson(String resultStr) {
+        try {
+            var start = resultStr.indexOf("```json");
+            if (start < 0) {
+                return null;
+            }
+            start += "```json".length();
+
+            final var end = resultStr.lastIndexOf("```");
+            if (end < 0) {
+                return null;
+            }
+            if (start >= end) {
+                return null;
+            }
+
+            final var r = ENV.getMapper().readValue(resultStr.substring(start, end), PromptProcessingResult.class);
+            LOGGER.info("Processed output manually, extracted payload without losses");
+            return r;
+        } catch (Throwable throwable) {
+            return null;
         }
     }
 }

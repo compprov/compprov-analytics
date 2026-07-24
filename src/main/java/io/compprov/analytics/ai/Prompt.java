@@ -31,10 +31,13 @@ public enum Prompt {
         }
     }
 
-    public String jsonPromptTemplate(String cpg) throws IOException {
+    public String jsonPromptTemplate(String cpg, String rootVariableIds, String leafVariableIds, String multiUsedVariableIds) throws IOException {
         try {
             return new String(Prompt.class.getResourceAsStream("/prompts/json/" + file + "_prompt.md").readAllBytes())
-                    .replace("$CPG$", cpg);
+                    .replace("$CPG$", cpg)
+                    .replace("$ROOT_VARIABLE_IDS$", rootVariableIds)
+                    .replace("$LEAF_VARIABLE_IDS$", leafVariableIds)
+                    .replace("$MULTIUSED_VARIABLE_IDS$", multiUsedVariableIds);
         } catch (Throwable e) {
             throw new IOException("Unable to read " + file + " json template", e);
         }
