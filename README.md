@@ -32,7 +32,9 @@ in compprov-core), `compprov-analytics`:
 3. Optionally sends the snapshot to an LLM under five **fraud-pattern prompts** (see
    [LLM-based fraud analysis](#llm-based-fraud-analysis)) that reason about the graph's topology
    and lineage rather than just its arithmetic.
-4. Writes per-file findings plus an aggregated `out/summary.md` across all processed files.
+4. Writes per-file findings plus an aggregated summary under a fresh, timestamped run directory
+   (see [Output layout](#output-layout)) — each run gets its own folder, so nothing from a
+   previous run is ever overwritten.
 
 ## Building
 
@@ -55,7 +57,7 @@ own defaults and any bundled dependencies' SPI providers are preserved.
 java -jar compprov-analytics.jar \
   --cpgpath=<path-to-cpg-file> [--cpgpath=<path-to-cpg-file> ...] \
   [--plugin=<path-to-plugin-jar> ...] \
-  [--executePrompts=<true/false> ...] \
+  [--executePrompts=<true/false>] \
   [--intercallTimeoutMs=<ms>]
 ```
 
@@ -63,8 +65,8 @@ java -jar compprov-analytics.jar \
 |---|--------------------|------------------------------------------------------------------------------------------------------------------------------------|
 | `--cpgpath=<path>` | Yes, at least one  | Path to a CPG JSON snapshot to analyze. Repeatable to process multiple files in one run.                                           |
 | `--plugin=<path>` | No                 | Path to a plugin jar providing `EnvironmentCustomizer` and/or `ChatModel` implementations (see [Plugins](#plugins)). Repeatable.   |
+| `--executePrompts=<true/false>` | No, default `true` | When `false`, prompt execution is skipped even if a `ChatModel` was supplied by a plugin.                                          |
 | `--intercallTimeoutMs=<ms>` | No, default `0`    | Pause inserted before each LLM call, to stay under a provider's rate limit when a snapshot triggers all five prompts back to back. |
-| `--executePrompts=<ms>` | No, default `true` | When false - even if ChatModel is provided throigh the plugin, prompt execution is skipped.                                        |
 
 Running with no arguments prints this usage summary and exits with status `1`.
 
@@ -78,6 +80,7 @@ variables/operations to a dedicated JSON file under the file's output directory:
 |---|---|---|
 | **Replay mismatch** | A recorded variable's value differs from what replaying the graph's operations actually produces | `violated-computations.json` |
 | **Multiple leaves** | More than one terminal (unconsumed) output — a healthy single-outcome computation should converge on one | `leaves.json` |
+| **Duplicate-named leaf** | A leaf shares its exact `descriptor.name` with another variable elsewhere in the graph — a possible sign the leaf is an orphaned computation that a differently-sourced stand-in was substituted for | *(highlight only — also forwarded to the LLM prompts as `$DUPLICATE_NAME_LEAF_IDS$`)* |
 | **Unused roots** | Input variables that are never consumed by any operation | `unused.json` |
 | **Multiple math contexts** | More than one distinct `MathContext` used in the graph — a possible sign of selective rounding | `math-contexts.json` |
 | **Multi-used variables** | A non-`MathContext` variable consumed by more than one operation — a possible sign of double-counting | `multi-used.json` |
@@ -92,33 +95,44 @@ These checks are graph-shape checks, not domain checks — they don't know what 
 
 ## LLM-based fraud analysis
 
-For every snapshot, `compprov-analytics` runs it through five prompt templates in
+For every snapshot, `compprov-analytics` runs it through five prompts defined in
 `io.compprov.analytics.ai.Prompt`, each describing a distinct provenance-fraud pattern for the
 model to look for:
 
 | Prompt | Attack pattern |
 |---|---|
-| Calculation omission | A cost/liability or revenue/credit is computed correctly in an isolated subgraph but never wired into the final aggregation |
+| Calculation omission | A mandatory adjustment (cost, credit, or cross-check — financial or not) is computed correctly in an isolated subgraph but never wired into the final result |
 | Lineage disconnection | Context substitution / a value's causal chain is silently rerouted or severed |
 | Precision tampering | Rounding or precision is manipulated to shift the result in a favorable direction |
 | Semantic violation | A value is cast or reinterpreted across an incompatible semantic type/context |
-| Double counting | A value flows into the final result through more than one path, inflating the total |
+| Double counting | A value flows into the final result through more than one path, inflating or deflating the total |
 
-Each prompt has a **markdown** template (`src/main/resources/prompts/markdown/`) and a
-**JSON** template (`src/main/resources/prompts/json/`), differing only in the requested output
-format; both embed the snapshot verbatim in place of `$CPG$`.
+Each prompt has a **standalone markdown template** (`src/main/resources/prompts/markdown/`) for
+the no-chat-model path, and a **JSON-mode pair** (`src/main/resources/prompts/json/`) for the
+chat-model path:
 
-**Without a chat model** (no plugin supplies a `ChatModel`), the tool still renders the markdown
-prompt template for each of the five patterns into that snapshot's output directory — ready to
-paste into the LLM of your choice by hand — and the corresponding column in `out/summary.md`
-reads `—`.
+- `json/shared_system.md` — one file shared by all five prompts: role, CPG format spec, the
+  actual `<CPG>` data, structural reference data (root/leaf/multi-used/duplicate-named-leaf ID
+  lists), audit discipline, and the response format. It's identical across all five calls for a
+  given snapshot, so a `ChatModel` that supports system-message caching (e.g. Anthropic's
+  `cacheSystemMessages`) only pays to process it once per file.
+- `json/<prompt>_user.md` — the attack-specific half: objective, attack definition, invariants,
+  and the `<VERDICT>` array of values valid for that prompt.
 
-**With a chat model** (see [Plugins](#plugins)), the tool renders the JSON prompt template
-instead, sends it to the model, and expects a JSON response matching
-`PromptProcessingResult(verdict, confidence_score, markdown_report)`. The raw JSON is saved as
-`<prompt>_result.json`, and `markdown_report` is rendered into `<prompt>_result.md` via
+Both the markdown and JSON-mode templates substitute the same placeholders (`$CPG$`,
+`$ROOT_VARIABLE_IDS$`, `$LEAF_VARIABLE_IDS$`, `$MULTIUSED_VARIABLE_IDS$`,
+`$DUPLICATE_NAME_LEAF_IDS$`).
+
+**Without a chat model** (no plugin supplies a `ChatModel`), the tool renders each prompt's
+standalone markdown template into that snapshot's output directory — ready to paste into the LLM
+of your choice by hand — and the corresponding column in the aggregate summary reads `—`.
+
+**With a chat model** (see [Plugins](#plugins)), the tool sends `shared_system.md` and each
+prompt's `<prompt>_user.md` as a `SystemMessage`/`UserMessage` pair, and expects a JSON response
+matching `PromptProcessingResult(verdict, confidence_score, markdown_report)`. The raw JSON is
+saved as `<prompt>_result.json`, and `markdown_report` is rendered into `<prompt>_result.md` via
 `templates/markdown_result.md`. Every prompt's `verdict`/`confidence_score` also feeds into that
-file's row and `out/summary.md`'s overview table.
+file's row and the aggregate overview table.
 
 ## Plugins
 
@@ -137,14 +151,18 @@ need to bundle `compprov-core` or `langchain4j-open-ai` itself) and looks up pro
 | `io.compprov.core.EnvironmentCustomizer` | Applied immediately to the shared `ComputationEnvironment` — typically registers wrappers/deserializers for domain-specific types used in the snapshot |
 | `dev.langchain4j.model.chat.ChatModel` | Becomes the model used for every LLM prompt for the rest of the run |
 
-See [compprov-plugin-example](https://github.com/compprov/compprov-plugin-example) for a
-worked example of both: a `Amount`/`Rate` domain-type `EnvironmentCustomizer` and a
-Gemini-backed `ChatModel`.
+See [compprov-plugin-example](https://github.com/compprov/compprov-plugin-example) for a worked
+example of both: `Amount`/`Rate`/`OptionPosition` domain-type wrappers, and a `ChatModel` backed
+by langchain4j's native `AnthropicChatModel` (with an `OpenAiChatModel` fallback), configured
+entirely from environment variables.
 
 ## Output layout
 
+Each run gets its own timestamped directory (`yyyy-MM-dd_HH-mm-ss.SSS/out/`), so nothing from a
+previous run is overwritten:
+
 ```
-out/
+<yyyy-MM-dd_HH-mm-ss.SSS>/out/
 ├── summary.md                              Aggregated overview + highlights across all --cpgpath files
 └── <cpg-filename>/
     ├── summary.md                          Detailed per-file report: validity, highlights, and fraud-pattern verdicts
@@ -157,9 +175,15 @@ out/
     ├── math-contexts.json                  All MathContext variables found
     ├── scaling-operations.json             All setScale operations and their variables
     ├── chrono-violations.json              Operations/variables with out-of-order timestamps
-    └── <prompt>_prompt.md                  Rendered prompt sent (or ready to send) to an LLM, per fraud pattern
-    └── <prompt>_result.json                Raw LLM response (only when a ChatModel plugin is active)
-    └── <prompt>_result.md                  Rendered verdict + confidence + report (only when a ChatModel plugin is active)
+    │
+    │   # No chat model configured:
+    ├── <prompt>_prompt.md                  Standalone prompt, ready to paste into an LLM by hand
+    │
+    │   # Chat model configured (via --plugin):
+    ├── system_prompt.md                    Shared system prompt — written once per file, not per prompt
+    ├── <prompt>_user_prompt.md             This prompt's user message
+    ├── <prompt>_result.json                Raw LLM response
+    └── <prompt>_result.md                  Rendered verdict + confidence + report
 ```
 
 ## License

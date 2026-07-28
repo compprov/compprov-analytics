@@ -8,19 +8,34 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 
+/**
+ * Accumulates one CPG snapshot's findings as {@code Main.processFile} runs: structural
+ * highlights, the two deterministic validity flags (replay and chronology), and — one per
+ * {@link Prompt}, if a chat model is configured — the reduced LLM verdict/confidence pair used to
+ * build the summary tables.
+ */
 public class ProcessingResult {
     private final List<String> highlights = new ArrayList<>();
-    private LinkedHashMap<Prompt, ReducedPromptProcessingResult> llmResults = new LinkedHashMap<>();
+    private final LinkedHashMap<Prompt, ReducedPromptProcessingResult> llmResults = new LinkedHashMap<>();
     private boolean validCalculation = true;
+    private boolean validChronology = true;
+    private final String processingDir;
 
+    public ProcessingResult(String processingDir) {
+        this.processingDir = processingDir;
+    }
+
+    /** Appends a human-readable line describing a structural finding (e.g. an unused root, a broken-chronology hit). */
     public void addHighlight(String highlight) {
         highlights.add(highlight);
     }
 
+    /** Records a prompt's LLM result, keeping only verdict and confidence (see {@link ReducedPromptProcessingResult}). */
     public void addLlmResult(Prompt prompt, PromptProcessingResult llmResult) {
         llmResults.put(prompt, new ReducedPromptProcessingResult(llmResult.verdict(), llmResult.confidence_score()));
     }
 
+    /** Marks this snapshot's recomputed values as disagreeing with the recorded ones. */
     public void invalidateCalculation() {
         validCalculation = false;
     }
@@ -29,11 +44,27 @@ public class ProcessingResult {
         return highlights;
     }
 
+    /** @return this snapshot's LLM verdicts, keyed by {@link Prompt}, in the order they were processed */
     public LinkedHashMap<Prompt, ReducedPromptProcessingResult> getLlmResults() {
         return llmResults;
     }
 
+    /** @return {@code false} if replaying any operation produced a value differing from the recorded one */
     public boolean isValidCalculation() {
         return validCalculation;
+    }
+
+    /** @return {@code false} if any operation's or variable's timestamps were found out of causal order */
+    public boolean isValidChronology() {
+        return validChronology;
+    }
+
+    /** Marks this snapshot as having at least one timestamp out of causal order. */
+    public void invalidateChronology() {
+        validChronology = false;
+    }
+
+    public String getProcessingDir() {
+        return processingDir;
     }
 }
