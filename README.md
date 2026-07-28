@@ -186,6 +186,8 @@ previous run is overwritten:
     └── <prompt>_result.md                  Rendered verdict + confidence + report
 ```
 
+Input and Output samples are available here: https://github.com/compprov/compprov-plugin-example/tree/master/samples/
+
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE).
