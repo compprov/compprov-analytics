@@ -7,6 +7,7 @@ import dev.langchain4j.model.output.FinishReason;
 import io.compprov.analytics.ProcessingResult;
 import io.compprov.analytics.ai.Prompt;
 import io.compprov.analytics.ai.PromptProcessingResult;
+import io.compprov.analytics.ai.ReducedPromptProcessingResult;
 import io.compprov.core.ComputationEnvironment;
 import io.compprov.core.DefaultComputationEnvironment;
 import io.compprov.core.EnvironmentCustomizer;
@@ -23,6 +24,7 @@ import java.math.MathContext;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.Instant;
 import java.time.ZoneId;
@@ -31,10 +33,12 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.ServiceLoader;
+import java.util.Set;
 import java.util.logging.ConsoleHandler;
 import java.util.logging.Formatter;
 import java.util.logging.Level;
@@ -58,6 +62,24 @@ public class Main {
     private static ChatModel chatModel = null;
     private static boolean executePrompts = true;
     private static int intercallTimeoutMs = 0;
+    private static List<Prompt> activePrompts = List.of(Prompt.values());
+    private static final Map<String, String> templateOverrides = new HashMap<>();
+    private static final Set<String> TEMPLATE_OVERRIDE_KEYS = templateOverrideKeys();
+
+    /**
+     * All valid {@code --<key>=<path>} template-override keys: each {@link Prompt}'s markdown and
+     * JSON user template, plus the shared JSON system template. See {@link Prompt#markdownTemplateKey()},
+     * {@link Prompt#jsonUserTemplateKey()}, {@link Prompt#sharedJsonSystemTemplateKey()}.
+     */
+    private static Set<String> templateOverrideKeys() {
+        final var keys = new java.util.HashSet<String>();
+        keys.add(Prompt.sharedJsonSystemTemplateKey());
+        for (var prompt : Prompt.values()) {
+            keys.add(prompt.markdownTemplateKey());
+            keys.add(prompt.jsonUserTemplateKey());
+        }
+        return keys;
+    }
 
     static {
         LOGGER.setUseParentHandlers(false);
@@ -91,19 +113,30 @@ public class Main {
      * {@code --cpgpath} snapshot and writes the per-file and aggregate reports. Prints usage and
      * exits with status {@code 1} if no arguments are given.
      *
-     * @param args {@code --cpgpath=}, {@code --plugin=}, {@code --executePrompts=}, and
-     *             {@code --intercallTimeoutMs=} arguments; see the printed usage for details
+     * @param args {@code --cpgpath=}, {@code --cpgfolder=}, {@code --plugin=},
+     *             {@code --executePrompts=}, {@code --intercallTimeoutMs=}, {@code --llmTemplates=},
+     *             and per-template {@code --<templateKey>=<path>} override arguments; see the
+     *             printed usage for details
      */
     public static void main(String[] args) {
 
         //no args
         if (args.length == 0) {
             LOGGER.severe("""
-                    Usage: java -jar compprov-analytics.jar --cpgpath=<path-to-cpg-file> [--cpgpath=<path-to-cpg-file> ...] [--plugin=<path-to-plugin-jar>] [--executePrompts=<true/false>] [--intercallTimeoutMs=<ms>]
-                      --cpgpath=<path>            Path to a CPG JSON file to analyze. Repeatable; at least one is required.
+                    Usage: java -jar compprov-analytics.jar [--cpgpath=<path-to-cpg-file> ...] [--cpgfolder=<path-to-folder> ...] [--plugin=<path-to-plugin-jar>] [--executePrompts=<true/false>] [--intercallTimeoutMs=<ms>] [--llmTemplates=<name>[,<name>...]] [--<templateKey>=<path> ...]
+                      --cpgpath=<path>            Path to a CPG JSON file to analyze. Repeatable; at least one --cpgpath/--cpgfolder is required.
+                      --cpgfolder=<path>          Directory to scan recursively for *.json CPG files (extension matched case-insensitively). Every match is processed as a separate file. Repeatable.
                       --plugin=<path>             Path to a plugin JAR providing EnvironmentCustomizer/ChatModel implementations. Optional, repeatable.
                       --executePrompts=true/false Default true. False will skip prompt execution even if ChatModel is set.
-                      --intercallTimeoutMs=<ms>   Pause (in milliseconds) before each chat model call. Optional, defaults to 0.""");
+                      --intercallTimeoutMs=<ms>   Pause (in milliseconds) before each chat model call. Optional, defaults to 0.
+                      --llmTemplates=<names>      Comma-separated template names to generate/execute, e.g. calculation_omission,precision_tampering.
+                                                  Optional; defaults to all: %s
+                      --<templateKey>=<path>      Override a bundled prompt template with a file from disk, e.g.
+                                                  --calculation_omission_user=/path/to/my_template.md replaces the
+                                                  bundled calculation_omission_user.md. Optional, repeatable. Valid
+                                                  template keys: %s""".formatted(
+                    String.join(", ", java.util.Arrays.stream(Prompt.values()).map(Prompt::getTemplateName).toList()),
+                    String.join(", ", TEMPLATE_OVERRIDE_KEYS.stream().sorted().toList())));
 
             System.exit(1);
         }
@@ -139,6 +172,36 @@ public class Main {
                     LOGGER.log(Level.SEVERE, "Unable to process file: " + arg, th);
                 }
             }
+            if (arg.startsWith("--cpgfolder=")) {
+                try {
+                    final var folder = arg.substring("--cpgfolder=".length());
+                    final var found = scanCpgFolder(folder);
+                    LOGGER.info("Found %d CPG file(s) in folder: %s".formatted(found.size(), folder));
+                    cpgFiles.addAll(found);
+                } catch (Throwable th) {
+                    LOGGER.log(Level.SEVERE, "Unable to process folder: " + arg, th);
+                }
+            }
+            if (arg.startsWith("--llmTemplates=")) {
+                try {
+                    activePrompts = java.util.Arrays.stream(arg.substring("--llmTemplates=".length()).split(","))
+                            .map(String::trim)
+                            .filter(name -> !name.isEmpty())
+                            .map(Prompt::fromTemplateName)
+                            .toList();
+                } catch (Throwable th) {
+                    LOGGER.log(Level.SEVERE, "Unable to parse llmTemplates: " + arg, th);
+                }
+            }
+            if (arg.startsWith("--")) {
+                final var eq = arg.indexOf('=');
+                if (eq > 2) {
+                    final var key = arg.substring(2, eq);
+                    if (TEMPLATE_OVERRIDE_KEYS.contains(key)) {
+                        templateOverrides.put(key, arg.substring(eq + 1));
+                    }
+                }
+            }
         }
         if (!executePrompts) {
             chatModel = null;
@@ -149,7 +212,7 @@ public class Main {
 
         //files
         String prepath = ZonedDateTime.now().format(folderFormat) + "/out";
-        Map<String, ProcessingResult> result = new HashMap<>();
+        Map<String, ProcessingResult> result = new LinkedHashMap<>();
         for (int i = 0; i < cpgFiles.size(); i++) {
             final var filename = cpgFiles.get(i);
             try {
@@ -157,8 +220,13 @@ public class Main {
                 var r = processFile(prepath, i + 1, filename);
                 result.put(filename, r);
                 save(buildFileSummary(filename, r), r.getProcessingDir() + "/summary.md");
+                LOGGER.info("File processed. Highlights count: %d. Calculation valid: %b. Chronology valid: %b".formatted(
+                        r.getHighlights().size(),
+                        r.isValidCalculation(),
+                        r.isValidChronology()));
             } catch (Throwable th) {
                 LOGGER.log(Level.SEVERE, "Unable to process file: " + filename, th);
+                result.put(filename, null);
             }
         }
 
@@ -166,6 +234,28 @@ public class Main {
         new File(prepath).mkdirs();
         save(aggregateResults(result), prepath + "/summary.md");
         LOGGER.info("Processing is done, the report is saved into " + prepath + "/summary.md");
+    }
+
+    /**
+     * Recursively scans {@code folderPath} for files whose extension is {@code .json}
+     * (case-insensitive), each treated as a separate CPG snapshot to process.
+     *
+     * @return the matching file paths, sorted for deterministic processing order
+     * @throws IOException if {@code folderPath} doesn't exist, isn't a directory, or can't be walked
+     */
+    private static List<String> scanCpgFolder(String folderPath) throws IOException {
+        final var dir = Path.of(folderPath);
+        if (!Files.isDirectory(dir)) {
+            throw new IllegalArgumentException("Not a directory: " + folderPath);
+        }
+        try (var stream = Files.walk(dir)) {
+            return stream
+                    .filter(Files::isRegularFile)
+                    .filter(p -> p.getFileName().toString().toLowerCase(java.util.Locale.ROOT).endsWith(".json"))
+                    .map(Path::toString)
+                    .sorted()
+                    .toList();
+        }
     }
 
     /**
@@ -183,25 +273,38 @@ public class Main {
         }
 
         sb.append("## Overview\n\n");
-        sb.append("| File | Calculation | Chronology | Highlights |");
-        for (var prompt : Prompt.values()) {
+        sb.append("| № | File | Calculation | Chronology | Highlights |");
+        for (var prompt : activePrompts) {
             sb.append(" ").append(prompt.getDescription()).append(" |");
         }
-        sb.append("\n|---|---|---|---|");
-        for (var ignored : Prompt.values()) {
+        sb.append("\n|---|---|---|---|---|");
+        for (var ignored : activePrompts) {
             sb.append("---|");
         }
         sb.append("\n");
 
+        int i = 0;
         for (var entry : results.entrySet()) {
             final var file = entry.getKey();
             final var result = entry.getValue();
-            sb.append("| ").append(file).append(" | ")
-                    .append(result.isValidCalculation() ? "✅ Valid" : "❌ Invalid").append(" | ")
-                    .append(result.isValidChronology() ? "✅ Valid" : "❌ Invalid").append(" | ")
-                    .append(result.getHighlights().size()).append(" |");
-            for (var prompt : Prompt.values()) {
-                final var llmResult = result.getLlmResults().get(prompt);
+            LinkedHashMap<Prompt, ReducedPromptProcessingResult> llmResults;
+            if (result == null) {
+                sb.append("| ")
+                        .append(++i).append(" | ")
+                        .append(file).append(" | ")
+                        .append(" — | — | — |");
+                llmResults = new LinkedHashMap<>();
+            } else {
+                sb.append("| ")
+                        .append(++i).append(" | ")
+                        .append(file).append(" | ")
+                        .append(result.isValidCalculation() ? "✅ Valid" : "❌ Invalid").append(" | ")
+                        .append(result.isValidChronology() ? "✅ Valid" : "❌ Invalid").append(" | ")
+                        .append(result.getHighlights().size()).append(" |");
+                llmResults = result.getLlmResults();
+            }
+            for (var prompt : activePrompts) {
+                final var llmResult = llmResults.get(prompt);
                 if (llmResult == null) {
                     sb.append(" — |");
                 } else {
@@ -214,11 +317,18 @@ public class Main {
 
         sb.append("\n## Highlights\n\n");
         for (var entry : results.entrySet()) {
-            if (entry.getValue().getHighlights().isEmpty()) {
+            final var result = entry.getValue();
+            if (result == null) {
+                sb.append("### ").append(entry.getKey()).append("\n\n");
+                sb.append("- ").append("File processing failed, result skipped.").append("\n");
+                sb.append("\n");
+                continue;
+            }
+            if (result.getHighlights().isEmpty()) {
                 continue;
             }
             sb.append("### ").append(entry.getKey()).append("\n\n");
-            for (var highlight : entry.getValue().getHighlights()) {
+            for (var highlight : result.getHighlights()) {
                 sb.append("- ").append(highlight).append("\n");
             }
             sb.append("\n");
@@ -234,7 +344,7 @@ public class Main {
                     .append("supplies a `dev.langchain4j.model.chat.ChatModel` implementation, so the prompts are ")
                     .append("sent automatically and verdicts appear in this report.\n\n");
             sb.append("| Prompt | Prompt file |\n|---|---|\n");
-            for (var prompt : Prompt.values()) {
+            for (var prompt : activePrompts) {
                 sb.append("| ").append(prompt.getDescription())
                         .append(" | `").append(prompt.promptFilename()).append("` |\n");
             }
@@ -280,14 +390,14 @@ public class Main {
                     .append("supplies a `dev.langchain4j.model.chat.ChatModel` implementation, so the prompts are ")
                     .append("sent automatically and verdicts appear in this report.\n\n");
             sb.append("| Prompt | Prompt file |\n|---|---|\n");
-            for (var prompt : Prompt.values()) {
+            for (var prompt : activePrompts) {
                 sb.append("| ").append(prompt.getDescription())
                         .append(" | `").append(prompt.promptFilename()).append("` |\n");
             }
             sb.append("\n");
         } else {
             sb.append("| Prompt | Verdict | Confidence | Report |\n|---|---|---|---|\n");
-            for (var prompt : Prompt.values()) {
+            for (var prompt : activePrompts) {
                 final var llmResult = result.getLlmResults().get(prompt);
                 if (llmResult == null) {
                     sb.append("| ").append(prompt.getDescription()).append(" | — | — | — |\n");
@@ -402,9 +512,9 @@ public class Main {
                 result.addHighlight("Invalid variable value detected. Expected: " + v.value() + ". Computed: " + cv.value() + ". Variable id: " + v.track().getId());
                 result.invalidateCalculation();
                 invalidVars.put(v.track().getId(), v);
-                var operation = snapshotNavigator.producedBy(v.track().getId()).get();
+                var operation = snapshotNavigator.producedBy(v.track().getId()).orElseThrow();
                 invalidOps.add(operation);
-                operation.arguments().forEach(arg -> invalidVars.put(arg.value(), snapshotNavigator.variable(arg.value()).get()));
+                operation.arguments().forEach(arg -> invalidVars.put(arg.value(), snapshotNavigator.variable(arg.value()).orElseThrow()));
             }
         }
         save(serialize(new Snapshot(
@@ -487,8 +597,8 @@ public class Main {
         for (var operation : snapshotNavigator.operations()) {
             if ("setScale".equals(operation.track().getDescriptor().getName())) {
                 scalingOps.add(operation);
-                scalingVars.put(operation.resultId(), snapshotNavigator.variable(operation.resultId()).get());
-                operation.arguments().forEach(arg -> scalingVars.put(arg.value(), snapshotNavigator.variable(arg.value()).get()));
+                scalingVars.put(operation.resultId(), snapshotNavigator.variable(operation.resultId()).orElseThrow());
+                operation.arguments().forEach(arg -> scalingVars.put(arg.value(), snapshotNavigator.variable(arg.value()).orElseThrow()));
             }
         }
         save(serialize(new Snapshot(
@@ -510,19 +620,19 @@ public class Main {
             if (operation.track().getStartedAt().isBefore(date)) {
                 result.addHighlight("Broken chronology detected. Operation " + operation.track().getId() + " started at is before previous operation");
                 chronoOps.put(operation.track().getId(), operation);
-                chronoVars.put(operation.resultId(), snapshotNavigator.variable(operation.resultId()).get());
-                operation.arguments().forEach(arg -> chronoVars.put(arg.value(), snapshotNavigator.variable(arg.value()).get()));
+                chronoVars.put(operation.resultId(), snapshotNavigator.variable(operation.resultId()).orElseThrow());
+                operation.arguments().forEach(arg -> chronoVars.put(arg.value(), snapshotNavigator.variable(arg.value()).orElseThrow()));
                 result.invalidateChronology();
             }
             date = operation.track().getStartedAt();
 
             for (var argument : operation.arguments()) {
-                final var variable = snapshotNavigator.variable(argument.variableId()).get();
+                final var variable = snapshotNavigator.variable(argument.variableId()).orElseThrow();
                 if (date.isBefore(variable.track().getCreatedAt())) {
                     result.addHighlight("Broken chronology detected. Variable " + variable.track().getId() + " created after operation " + operation.track().getId() + " started");
                     chronoOps.put(operation.track().getId(), operation);
-                    chronoVars.put(operation.resultId(), snapshotNavigator.variable(operation.resultId()).get());
-                    operation.arguments().forEach(arg -> chronoVars.put(arg.value(), snapshotNavigator.variable(arg.value()).get()));
+                    chronoVars.put(operation.resultId(), snapshotNavigator.variable(operation.resultId()).orElseThrow());
+                    operation.arguments().forEach(arg -> chronoVars.put(arg.value(), snapshotNavigator.variable(arg.value()).orElseThrow()));
                     result.invalidateChronology();
                 }
             }
@@ -530,18 +640,18 @@ public class Main {
             if (operation.track().getFinishedAt().isBefore(date)) {
                 result.addHighlight("Broken chronology detected. Operation " + operation.track().getId() + " finished at is before operation started");
                 chronoOps.put(operation.track().getId(), operation);
-                chronoVars.put(operation.resultId(), snapshotNavigator.variable(operation.resultId()).get());
-                operation.arguments().forEach(arg -> chronoVars.put(arg.value(), snapshotNavigator.variable(arg.value()).get()));
+                chronoVars.put(operation.resultId(), snapshotNavigator.variable(operation.resultId()).orElseThrow());
+                operation.arguments().forEach(arg -> chronoVars.put(arg.value(), snapshotNavigator.variable(arg.value()).orElseThrow()));
                 result.invalidateChronology();
             }
             date = operation.track().getFinishedAt();
 
-            final var variable = snapshotNavigator.variable(operation.resultId()).get();
-            if (date.isBefore(variable.track().getCreatedAt())) {
-                result.addHighlight("Broken chronology detected. Operation " + operation.track().getId() + " finished at is before result created");
+            final var variable = snapshotNavigator.variable(operation.resultId()).orElseThrow();
+            if (date.isAfter(variable.track().getCreatedAt())) {
+                result.addHighlight("Broken chronology detected. Operation " + operation.track().getId() + " finished at is after result created");
                 chronoOps.put(operation.track().getId(), operation);
-                chronoVars.put(operation.resultId(), snapshotNavigator.variable(operation.resultId()).get());
-                operation.arguments().forEach(arg -> chronoVars.put(arg.value(), snapshotNavigator.variable(arg.value()).get()));
+                chronoVars.put(operation.resultId(), snapshotNavigator.variable(operation.resultId()).orElseThrow());
+                operation.arguments().forEach(arg -> chronoVars.put(arg.value(), snapshotNavigator.variable(arg.value()).orElseThrow()));
                 result.invalidateChronology();
             }
         }
@@ -565,17 +675,22 @@ public class Main {
         String sharedSystemText = null;
         if (chatModel != null) {
             try {
-                sharedSystemText = Prompt.sharedJsonSystemPromptTemplate(snapshotStr, rootIds, leafIds, multiUsedIds, duplicateNameLeafIds);
+                sharedSystemText = Prompt.sharedJsonSystemPromptTemplate(templateOverrides.get(Prompt.sharedJsonSystemTemplateKey()), snapshotStr, rootIds, leafIds, multiUsedIds, duplicateNameLeafIds);
                 save(sharedSystemText, path + "/" + Prompt.sharedJsonSystemPromptFilename());
             } catch (IOException e) {
                 throw new IllegalStateException("Unable to create shared system prompt", e);
             }
         }
 
-        for (int i = 0; i < Prompt.values().length; i++) {
-            final var prompt = Prompt.values()[i];
-            LOGGER.info("Processing prompt %d of %d: %s".formatted(i + 1, Prompt.values().length, prompt.getDescription()));
+        for (int i = 0; i < activePrompts.size(); i++) {
+            final var prompt = activePrompts.get(i);
             final var r = processPrompt(path, snapshotStr, prompt, sharedSystemText, rootIds, leafIds, multiUsedIds, duplicateNameLeafIds);
+            LOGGER.info("Prompt %d of %d: %s. Verdict: %s(%.2f)".formatted(
+                    i + 1,
+                    activePrompts.size(),
+                    prompt.getDescription(),
+                    r.isEmpty() ? "-" : r.get().verdict(),
+                    r.isEmpty() ? 0 : r.get().confidence_score()));
             r.ifPresent(promptProcessingResult -> result.addLlmResult(prompt, promptProcessingResult));
         }
 
@@ -639,7 +754,7 @@ public class Main {
                                                                   String multiUsedIds, String duplicateNameLeafIds) {
         if (chatModel == null) {
             try {
-                final var promptText = prompt.markdownPromptTemplate(snapshotStr, rootIds, leafIds, multiUsedIds, duplicateNameLeafIds);
+                final var promptText = prompt.markdownPromptTemplate(templateOverrides.get(prompt.markdownTemplateKey()), snapshotStr, rootIds, leafIds, multiUsedIds, duplicateNameLeafIds);
                 save(promptText, path + "/" + prompt.promptFilename());
             } catch (IOException e) {
                 throw new IllegalStateException("Unable to create prompt: " + prompt.getDescription(), e);
@@ -649,7 +764,7 @@ public class Main {
 
         String userText;
         try {
-            userText = prompt.jsonUserPromptTemplate();
+            userText = prompt.jsonUserPromptTemplate(templateOverrides.get(prompt.jsonUserTemplateKey()));
             save(userText, path + "/" + prompt.jsonUserPromptFilename());
         } catch (IOException e) {
             throw new IllegalStateException("Unable to create prompt: " + prompt.getDescription(), e);
@@ -696,12 +811,13 @@ public class Main {
                 }
             }
 
-            final var markdownResult = new String(Main.class.getResourceAsStream("/templates/markdown_result.md").readAllBytes())
-                    .replace("$VERDICT$", result.verdict())
-                    .replace("$SCORE$", Double.toString(result.confidence_score()))
-                    .replace("$MARKDOWN$", result.markdown_report());
-            save(markdownResult, path + "/" + prompt.markdownResultFilename());
-
+            try (final var is = Main.class.getResourceAsStream("/templates/markdown_result.md")) {
+                final var markdownResult = new String(is.readAllBytes())
+                        .replace("$VERDICT$", result.verdict())
+                        .replace("$SCORE$", Double.toString(result.confidence_score()))
+                        .replace("$MARKDOWN$", result.markdown_report());
+                save(markdownResult, path + "/" + prompt.markdownResultFilename());
+            }
             return Optional.of(result);
         } catch (Throwable e) {
             throw new IllegalStateException("Unable to process prompt: " + prompt.getDescription(), e);
