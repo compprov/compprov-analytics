@@ -51,22 +51,31 @@ The `maven-shade-plugin` produces a single runnable fat jar at
 and `META-INF/services` entries merged (`ServicesResourceTransformer`) so that both this jar's
 own defaults and any bundled dependencies' SPI providers are preserved.
 
+Alternatively, skip building it yourself: every published [GitHub release](https://github.com/compprov/compprov-analytics/releases)
+has the same fat jar attached as `compprov-analytics-<version>.jar`.
+
 ## Usage
 
 ```bash
 java -jar compprov-analytics.jar \
-  --cpgpath=<path-to-cpg-file> [--cpgpath=<path-to-cpg-file> ...] \
+  [--cpgpath=<path-to-cpg-file> ...] \
+  [--cpgfolder=<path-to-folder> ...] \
   [--plugin=<path-to-plugin-jar> ...] \
   [--executePrompts=<true/false>] \
-  [--intercallTimeoutMs=<ms>]
+  [--intercallTimeoutMs=<ms>] \
+  [--llmTemplates=<name>[,<name>...]] \
+  [--<templateKey>=<path> ...]
 ```
 
 | Argument | Required           | Description                                                                                                                        |
 |---|--------------------|------------------------------------------------------------------------------------------------------------------------------------|
-| `--cpgpath=<path>` | Yes, at least one  | Path to a CPG JSON snapshot to analyze. Repeatable to process multiple files in one run.                                           |
+| `--cpgpath=<path>` | Yes, at least one `--cpgpath`/`--cpgfolder` | Path to a CPG JSON snapshot to analyze. Repeatable to process multiple files in one run.                          |
+| `--cpgfolder=<path>` | Yes, at least one `--cpgpath`/`--cpgfolder` | Directory to scan recursively for `*.json` CPG files (extension matched case-insensitively); every match is processed as a separate file. Repeatable. |
 | `--plugin=<path>` | No                 | Path to a plugin jar providing `EnvironmentCustomizer` and/or `ChatModel` implementations (see [Plugins](#plugins)). Repeatable.   |
 | `--executePrompts=<true/false>` | No, default `true` | When `false`, prompt execution is skipped even if a `ChatModel` was supplied by a plugin.                                          |
 | `--intercallTimeoutMs=<ms>` | No, default `0`    | Pause inserted before each LLM call, to stay under a provider's rate limit when a snapshot triggers all five prompts back to back. |
+| `--llmTemplates=<names>` | No, default all five | Comma-separated list of prompt names to generate/execute, e.g. `calculation_omission,precision_tampering` (see [LLM-based fraud analysis](#llm-based-fraud-analysis) for the full list of names). |
+| `--<templateKey>=<path>` | No, repeatable     | Overrides a bundled prompt template with a file from disk, e.g. `--calculation_omission_user=/path/to/my_template.md` replaces the bundled `calculation_omission_user.md`. Run with no arguments to print the full list of valid template keys. |
 
 Running with no arguments prints this usage summary and exits with status `1`.
 
@@ -99,13 +108,16 @@ For every snapshot, `compprov-analytics` runs it through five prompts defined in
 `io.compprov.analytics.ai.Prompt`, each describing a distinct provenance-fraud pattern for the
 model to look for:
 
-| Prompt | Attack pattern |
-|---|---|
-| Calculation omission | A mandatory adjustment (cost, credit, or cross-check — financial or not) is computed correctly in an isolated subgraph but never wired into the final result |
-| Lineage disconnection | Context substitution / a value's causal chain is silently rerouted or severed |
-| Precision tampering | Rounding or precision is manipulated to shift the result in a favorable direction |
-| Semantic violation | A value is cast or reinterpreted across an incompatible semantic type/context |
-| Double counting | A value flows into the final result through more than one path, inflating or deflating the total |
+| Prompt | `--llmTemplates=` name | Attack pattern |
+|---|---|---|
+| Calculation omission | `calculation_omission` | A mandatory adjustment (cost, credit, or cross-check — financial or not) is computed correctly in an isolated subgraph but never wired into the final result |
+| Lineage disconnection | `lineage_disconnection_and_context_substitution` | Context substitution / a value's causal chain is silently rerouted or severed |
+| Precision tampering | `precision_tampering` | Rounding or precision is manipulated to shift the result in a favorable direction |
+| Semantic violation | `semantic_type_and_context_cast_attack` | A value is cast or reinterpreted across an incompatible semantic type/context |
+| Double counting | `topological_accumulation_fraud_via_double_counting` | A value flows into the final result through more than one path, inflating or deflating the total |
+
+All five run by default; pass `--llmTemplates=` with a comma-separated subset of the names above
+to only generate/execute those.
 
 Each prompt has a **standalone markdown template** (`src/main/resources/prompts/markdown/`) for
 the no-chat-model path, and a **JSON-mode pair** (`src/main/resources/prompts/json/`) for the
@@ -122,6 +134,11 @@ chat-model path:
 Both the markdown and JSON-mode templates substitute the same placeholders (`$CPG$`,
 `$ROOT_VARIABLE_IDS$`, `$LEAF_VARIABLE_IDS$`, `$MULTIUSED_VARIABLE_IDS$`,
 `$DUPLICATE_NAME_LEAF_IDS$`).
+
+Any of these bundled templates can be swapped out at runtime with a file from disk via
+`--<templateKey>=<path>` (e.g. `--calculation_omission_user=/path/to/my_template.md`,
+`--shared_system=/path/to/my_shared_system.md`) — see the `--<templateKey>=<path>` row in
+[Usage](#usage).
 
 **Without a chat model** (no plugin supplies a `ChatModel`), the tool renders each prompt's
 standalone markdown template into that snapshot's output directory — ready to paste into the LLM
@@ -163,8 +180,8 @@ previous run is overwritten:
 
 ```
 <yyyy-MM-dd_HH-mm-ss.SSS>/out/
-├── summary.md                              Aggregated overview + highlights across all --cpgpath files
-└── <cpg-filename>/
+├── summary.md                              Aggregated overview + highlights across all --cpgpath/--cpgfolder files
+└── <n>_<cpg-filename>/                     n is the file's 1-based position in the processing order
     ├── summary.md                          Detailed per-file report: validity, highlights, and fraud-pattern verdicts
     │                                        (or, with no chat model, a pointer to each prompt file and how to run it manually)
     ├── highlights.json                     This file's flagged issues, as a JSON array
