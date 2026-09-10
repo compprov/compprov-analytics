@@ -27,7 +27,8 @@ public enum Prompt {
     LINEAGE_DISCONNECTION("Lineage disconnection", "lineage_disconnection_and_context_substitution"),
     PRECISION_TAMPERING("Precision tampering", "precision_tampering"),
     SEMANTIC_VIOLATION("Semantic violation", "semantic_type_and_context_cast_attack"),
-    DOUBLE_COUNTING("Double counting", "topological_accumulation_fraud_via_double_counting");
+    DOUBLE_COUNTING("Double counting", "topological_accumulation_fraud_via_double_counting"),
+    TOPOLOGICAL_FRAUD("Topological fraud", "topological_fraud");
 
     private final String description;
     private final String file;

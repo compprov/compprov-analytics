@@ -67,15 +67,15 @@ java -jar compprov-analytics.jar \
   [--<templateKey>=<path> ...]
 ```
 
-| Argument | Required           | Description                                                                                                                        |
-|---|--------------------|------------------------------------------------------------------------------------------------------------------------------------|
-| `--cpgpath=<path>` | Yes, at least one `--cpgpath`/`--cpgfolder` | Path to a CPG JSON snapshot to analyze. Repeatable to process multiple files in one run.                          |
-| `--cpgfolder=<path>` | Yes, at least one `--cpgpath`/`--cpgfolder` | Directory to scan recursively for `*.json` CPG files (extension matched case-insensitively); every match is processed as a separate file. Repeatable. |
-| `--plugin=<path>` | No                 | Path to a plugin jar providing `EnvironmentCustomizer` and/or `ChatModel` implementations (see [Plugins](#plugins)). Repeatable.   |
-| `--executePrompts=<true/false>` | No, default `true` | When `false`, prompt execution is skipped even if a `ChatModel` was supplied by a plugin.                                          |
-| `--intercallTimeoutMs=<ms>` | No, default `0`    | Pause inserted before each LLM call, to stay under a provider's rate limit when a snapshot triggers all five prompts back to back. |
-| `--llmTemplates=<names>` | No, default all five | Comma-separated list of prompt names to generate/execute, e.g. `calculation_omission,precision_tampering` (see [LLM-based fraud analysis](#llm-based-fraud-analysis) for the full list of names). |
-| `--<templateKey>=<path>` | No, repeatable     | Overrides a bundled prompt template with a file from disk, e.g. `--calculation_omission_user=/path/to/my_template.md` replaces the bundled `calculation_omission_user.md`. Run with no arguments to print the full list of valid template keys. |
+| Argument | Required                                                                                         | Description                                                                                                                        |
+|---|--------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------|
+| `--cpgpath=<path>` | Yes, at least one `--cpgpath`/`--cpgfolder`                                                      | Path to a CPG JSON snapshot to analyze. Repeatable to process multiple files in one run.                          |
+| `--cpgfolder=<path>` | Yes, at least one `--cpgpath`/`--cpgfolder`                                                      | Directory to scan recursively for `*.json` CPG files (extension matched case-insensitively); every match is processed as a separate file. Repeatable. |
+| `--plugin=<path>` | No                                                                                               | Path to a plugin jar providing `EnvironmentCustomizer` and/or `ChatModel` implementations (see [Plugins](#plugins)). Repeatable.   |
+| `--executePrompts=<true/false>` | No, default `true`                                                                               | When `false`, prompt execution is skipped even if a `ChatModel` was supplied by a plugin.                                          |
+| `--intercallTimeoutMs=<ms>` | No, default `0`                                                                                  | Pause inserted before each LLM call, to stay under a provider's rate limit when a snapshot triggers all five prompts back to back. |
+| `--llmTemplates=<names>` | No, default: `topological_fraud`, `precision_tampering`, `semantic_type_and_context_cast_attack` | Comma-separated list of prompt names to generate/execute, e.g. `calculation_omission,precision_tampering` (see [LLM-based fraud analysis](#llm-based-fraud-analysis) for the full list of names). |
+| `--<templateKey>=<path>` | No, repeatable                                                                                   | Overrides a bundled prompt template with a file from disk, e.g. `--calculation_omission_user=/path/to/my_template.md` replaces the bundled `calculation_omission_user.md`. Run with no arguments to print the full list of valid template keys. |
 
 Running with no arguments prints this usage summary and exits with status `1`.
 
@@ -108,13 +108,14 @@ For every snapshot, `compprov-analytics` runs it through five prompts defined in
 `io.compprov.analytics.ai.Prompt`, each describing a distinct provenance-fraud pattern for the
 model to look for:
 
-| Prompt | `--llmTemplates=` name | Attack pattern |
-|---|---|---|
-| Calculation omission | `calculation_omission` | A mandatory adjustment (cost, credit, or cross-check — financial or not) is computed correctly in an isolated subgraph but never wired into the final result |
-| Lineage disconnection | `lineage_disconnection_and_context_substitution` | Context substitution / a value's causal chain is silently rerouted or severed |
-| Precision tampering | `precision_tampering` | Rounding or precision is manipulated to shift the result in a favorable direction |
-| Semantic violation | `semantic_type_and_context_cast_attack` | A value is cast or reinterpreted across an incompatible semantic type/context |
-| Double counting | `topological_accumulation_fraud_via_double_counting` | A value flows into the final result through more than one path, inflating or deflating the total |
+| Prompt                | `--llmTemplates=` name | Attack pattern                                                                                                                                               |
+|-----------------------|---|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Calculation omission  | `calculation_omission` | A mandatory adjustment (cost, credit, or cross-check — financial or not) is computed correctly in an isolated subgraph but never wired into the final result |
+| Lineage disconnection | `lineage_disconnection_and_context_substitution` | Context substitution / a value's causal chain is silently rerouted or severed                                                                                |
+| Precision tampering   | `precision_tampering` | Rounding or precision is manipulated to shift the result in a favorable direction                                                                            |
+| Semantic violation    | `semantic_type_and_context_cast_attack` | A value is cast or reinterpreted across an incompatible semantic type/context                                                                                |
+| Double counting       | `topological_accumulation_fraud_via_double_counting` | A value flows into the final result through more than one path, inflating or deflating the total                                                             |
+| Topological fraud     | `topological_fraud` | Common prompt for `topological_accumulation_fraud_via_double_counting`, `lineage_disconnection_and_context_substitution` and  `calculation_omission attacks`       |
 
 All five run by default; pass `--llmTemplates=` with a comma-separated subset of the names above
 to only generate/execute those.

@@ -26,4 +26,4 @@ Of the sets provided in the system message under STRUCTURAL REFERENCE DATA, the 
 
 Follow the JSON envelope and markdown_report structure described in the system message.
 
-<VERDICT>["CLEAN", "DOUBLE COUNTING DETECTED", "TOPOLOGICAL ANOMALY"]</VERDICT>
+<VERDICT>["CLEAN", "ANOMALY DETECTED", "SUSPICIOUS LOGIC"]</VERDICT>

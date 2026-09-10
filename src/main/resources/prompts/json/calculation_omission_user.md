@@ -18,4 +18,4 @@ Calculation Omission occurs when a mandatory adjustment — a cost, credit, corr
 
 Follow the JSON envelope and markdown_report structure described in the system message.
 
-<VERDICT>["CLEAN", "CALCULATION OMISSION DETECTED", "UNLINKED DEDUCTION"]</VERDICT>
+<VERDICT>["CLEAN", "ANOMALY DETECTED", "SUSPICIOUS LOGIC"]</VERDICT>
