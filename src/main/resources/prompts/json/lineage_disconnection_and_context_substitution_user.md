@@ -35,4 +35,4 @@ The provided name-collision set only catches exact string matches — treat it a
 
 Follow the JSON envelope and markdown_report structure described in the system message.
 
-<VERDICT>["CLEAN", "LINEAGE BREAK DETECTED", "SUSPICIOUS SUBSTITUTION"]</VERDICT>
+<VERDICT>["CLEAN", "ANOMALY DETECTED", "SUSPICIOUS LOGIC"]</VERDICT>

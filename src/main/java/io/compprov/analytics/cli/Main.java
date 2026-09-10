@@ -62,7 +62,7 @@ public class Main {
     private static ChatModel chatModel = null;
     private static boolean executePrompts = true;
     private static int intercallTimeoutMs = 0;
-    private static List<Prompt> activePrompts = List.of(Prompt.values());
+    private static List<Prompt> activePrompts = List.of(Prompt.TOPOLOGICAL_FRAUD, Prompt.PRECISION_TAMPERING, Prompt.SEMANTIC_VIOLATION);
     private static final Map<String, String> templateOverrides = new HashMap<>();
     private static final Set<String> TEMPLATE_OVERRIDE_KEYS = templateOverrideKeys();
 

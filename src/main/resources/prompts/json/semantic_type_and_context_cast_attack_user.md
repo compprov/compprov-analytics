@@ -1,6 +1,8 @@
 ## OBJECTIVE
 Analyze the computation graph (`<CPG>`) provided in the system message to detect potential **Semantic Type and Context Cast** attacks, where technical type safety, signatures, and mathematical replay pass validation perfectly, but the underlying business meaning, domain metadata, or regulatory context of data is covertly altered.
 
+Focus on metadata/business context shifts. 
+
 ---
 
 ## ATTACK VECTOR DEFINITION: Semantic Type and Context Cast Attack
@@ -20,4 +22,4 @@ Map both technical type attributes (`valueClass`) and business metadata (`descri
 
 Follow the JSON envelope and markdown_report structure described in the system message.
 
-<VERDICT>["CLEAN", "SEMANTIC CAST DETECTED", "CONTEXT MISMATCH"]</VERDICT>
+<VERDICT>["CLEAN", "ANOMALY DETECTED", "SUSPICIOUS LOGIC"]</VERDICT>
