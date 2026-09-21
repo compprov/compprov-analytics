@@ -43,10 +43,3 @@ All four sets provided in the system message under STRUCTURAL REFERENCE DATA are
 - Deduplicated sum $S_{dedup}$ (each unique root entity counted once) must match the reported consolidation $S_{reported}$.
 </EXPECTED_INVARIANTS>
 
----
-
-## RESPONSE FORMAT SPECIFICS FOR THIS TASK
-
-Follow the JSON envelope and markdown_report structure described in the system message.
-
-<VERDICT>["CLEAN", "ANOMALY DETECTED", "SUSPICIOUS LOGIC"]</VERDICT>

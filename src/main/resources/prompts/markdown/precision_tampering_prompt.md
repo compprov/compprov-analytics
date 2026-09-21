@@ -39,8 +39,11 @@ Focus on numerical accuracy, rounding modes, and precision degradation.
 Precision and Scale Tampering occurs when an adversary or faulty business logic exploits how numbers are scaled, rounded, or converted between data types or units. This includes forcibly reducing an intermediate value's scale before completing an aggregation (causing residual value leakage), using a non-standard rounding mode to consistently drain sub-cent fractions into an attacker-controlled pool (Salami Slicing), reducing precision through arbitrary scaling operations, or downcasting a precise decimal type to `float`, `double`, or integer mid-pipeline.
 
 **Note:**
-- Operations may involve integers; ensure that premature integer division (e.g., dividing before multiplying) is not causing precision loss.
-- Calculations may represent an overall operation or a single step within a cyclic process; the presence of a cyclic process is unknown and must be determined by you.
+- Operations may involve primitives, high-precision numeric types, or domain-specific wrapper classes (e.g., custom currency, unit, amount objects or any other datatypes from various domains) where rounding, truncation, and scale constraints are embedded directly in the wrapper's internal context. Verify that premature division or domain-specific wrapper constraints are not causing unintended precision degradation.
+- Calculations may represent an overall operation or a single step within a cyclic process; analyze the CPG context, operation lineage, and descriptors to evaluate potential recurrence.
+- The `risk_score` for potential precision and truncation flaws depends on both materiality and execution context:
+   - **Materiality Override:** A large or high-impact arithmetic error represents a high `risk_score` regardless of cyclicity — a critical precision failure in a single, non-repeating execution is still a material flaw.
+   - **Cyclic Scaling:** For subtle or small-unit rounding/truncation discrepancies, scale your `risk_score` based on your confidence in the operation's cyclic or high-frequency nature: assign a lower risk score if the flaw is isolated and non-cyclic, and increase the score as your confidence grows that the flaw compounds across repeated executions.
 
 Recompute every operation with deep enough precision rational arithmetic and compare against the reported value at each step ($\Delta = |Exact\_Result - Reported\_Result|$). A boundary-sized discrepancy alone is not sufficient for an anomaly verdict — see the invariants below for what actually distinguishes tampering from ordinary rounding.
 
@@ -56,9 +59,15 @@ Recompute every operation with deep enough precision rational arithmetic and com
 ## AUDIT DISCIPLINE
 Once you have confirmed a genuine invariant violation against the graph, report it — do not let a plausible benign narrative talk you out of it. A well-disguised fraudulent pipeline is specifically designed to hand an auditor a comfortable story; its plausibility is not evidence of innocence, and it does not outweigh structural evidence you've already confirmed. The burden of proof rests on that benign interpretation, not on the finding: point to something actually *in the graph* — an annotation, documented rationale, explicit metadata — or report the violation and note the remaining ambiguity about intent for the reader to resolve. A violation's isolation in an otherwise-clean graph is not reassuring either — a single, surgical manipulation is exactly what a competent, targeted attack looks like.
 
-Stay internally consistent with your own analysis: if you already extracted a value or scale as one thing, your verdict can't silently restate it as something else to make a dismissal easier — a later contradiction with your own earlier finding is a sign you're rationalizing, not resolving.
+Stay internally consistent with your own analysis: if you already extracted a value or scale as one thing, you cannot silently restate it as something else to make a dismissal easier — a later contradiction with your own earlier finding is a sign you're rationalizing, not resolving.
 
-Use your confidence score to carry calibration, rather than resolving it by force-fitting the verdict. If a finding is clearly real and material, say so with a high score. If you found something genuinely irregular but aren't sure it rises to tampering rather than expected variance or a legitimate design you can't fully rule out, report that assessment and reflect the doubt in a lower confidence score — don't make the uncertainty disappear by defaulting the verdict to CLEAN instead.
+Use `risk_score` (0–100) to measure the probability and severity of invariant violations, structural tampering, or arithmetic flaws in the graph:
+- 0 represents a completely clean graph with zero evidence of tampering or invariant violations.
+- 100 represents a confirmed, material attack vector or severe structural exploit.
+
+Use intermediate score ranges to accurately calibrate uncertainty or ambiguous evidence:
+- If a finding is clearly real and material, reflect that with a high risk score.
+- If you find a genuine irregularity but cannot determine whether it stems from intentional tampering, expected variance, or an unstated domain convention, assign an intermediate risk score — do not erase the ambiguity by defaulting to a low risk score.
 
 ---
 
@@ -66,11 +75,8 @@ Use your confidence score to carry calibration, rather than resolving it by forc
 
 Return your audit report as markdown, using this structure exactly:
 
-### Verdict
-One of: `CLEAN` | `ANOMALY DETECTED` | `SUSPICIOUS LOGIC`
-
-### Confidence Score
-A number from 0-100.
+### Risk Score
+[Output an integer from 0–100 calculated according to the AUDIT DISCIPLINE guidelines.]
 
 ### Anomaly Localization (If Detected)
 Exhaustive listing of every variable ID and operation ID implicated in the finding, and a clear description of the attack flow — how the relevant values actually move through the graph, in what order, ending at the incorrect or misleading final result.
