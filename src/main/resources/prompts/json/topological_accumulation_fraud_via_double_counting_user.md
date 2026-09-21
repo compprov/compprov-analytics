@@ -20,10 +20,3 @@ Of the sets provided in the system message under STRUCTURAL REFERENCE DATA, the 
 - A cost, fee, or deduction that has already been netted into an intermediate subtotal must not be subtracted again from a later aggregate that already incorporates that subtotal.
 </EXPECTED_INVARIANTS>
 
----
-
-## RESPONSE FORMAT SPECIFICS FOR THIS TASK
-
-Follow the JSON envelope and markdown_report structure described in the system message.
-
-<VERDICT>["CLEAN", "ANOMALY DETECTED", "SUSPICIOUS LOGIC"]</VERDICT>

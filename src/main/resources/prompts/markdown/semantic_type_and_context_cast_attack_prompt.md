@@ -36,24 +36,34 @@ Focus on metadata/business context shifts.
 ---
 
 ## ATTACK VECTOR DEFINITION: Semantic Type and Context Cast Attack
-A Semantic Type and Context Cast Attack occurs when an adversary exploits the gap between technical type checking (e.g., confirming a field is a `java.math.BigDecimal`) and semantic domain validation (e.g., confirming whether that `BigDecimal` represents "Gross Revenue" or "Net Profit"). The system maintains 100% technical type continuity and mathematical convergence while silently re-mapping business context — preserving types while quietly altering or stripping domain metadata (`meta.domainType`, `units`, `taxStatus`); passing a variable through an identity or wrapper operation so downstream steps treat it as a completely different domain entity (e.g., casting a "Standard Risk Multiplier" into a "Corporate Discount Factor"); feeding an unadjusted metric into a step that silently consumes it as though already post-adjustment or tax-deducted, without altering the raw numeric value; or otherwise exploiting validation tooling that only checks node connectivity and schema compliance, not business meaning.
+A Semantic Type and Context Cast Attack occurs when an adversary exploits the gap between technical type checking (e.g., confirming a field is a `java.math.BigDecimal`) and semantic domain validation (e.g., confirming whether that `BigDecimal` represents "Gross Revenue" or "Net Profit"). The system maintains 100% technical type continuity and mathematical convergence while silently re-mapping business context — preserving types while quietly altering or stripping domain metadata (`domainType`, `units`, `taxStatus`); passing a variable through an identity or wrapper operation so downstream steps treat it as a completely different domain entity (e.g., casting a "Standard Risk Multiplier" into a "Corporate Discount Factor"); feeding an unadjusted metric into a step that silently consumes it as though already post-adjustment or tax-deducted, without altering the raw numeric value; or otherwise exploiting validation tooling that only checks node connectivity and schema compliance, not business meaning.
 
-Map both technical type attributes (`valueClass`) and business metadata (`descriptor.meta`, units, domain tags) for every variable, and trace the declared business context (C) from root variables through every downstream consumer. A node where C_source != C_target despite identical technical types (`BigDecimal` -> `BigDecimal`) — i.e., where technical type validity and mathematical replay both pass, but semantic continuity does not — is the signature of this attack, regardless of whether the operation performing the cast looks legitimate in isolation.
+Map both technical type attributes (`valueClass`) and business metadata (`descriptor`, units, domain tags) for every variable, and trace the declared business context (C) from root variables through every downstream consumer. A node where C_source != C_target despite identical technical types (`BigDecimal` -> `BigDecimal`) — i.e., where technical type validity and mathematical replay both pass, but semantic continuity does not — is the signature of this attack, regardless of whether the operation performing the cast looks legitimate in isolation.
 
 <EXPECTED_INVARIANTS>
-- A variable's business meaning (`descriptor.meta`) must remain consistent across operations unless explicitly transformed by a domain-justified business operation; downstream operations must consume variables whose domain attributes match the operational assumptions of the consuming node.
+- A variable's business meaning (`descriptor`) must remain consistent across operations unless explicitly transformed by a domain-justified business operation; downstream operations must consume variables whose domain attributes match the operational assumptions of the consuming node.
 - Changing the semantic interpretation of a value requires an explicit domain transformation node — implicit re-labeling or metadata suppression is strictly prohibited, and no operation may consume a variable under a business definition that conflicts with its originating metadata.
 - Domain transitions (e.g., Gross -> Net, Local Currency -> Base Currency) must be backed by explicit, auditable transformation logic, not merely by an operation that happens to be type-safe.
 </EXPECTED_INVARIANTS>
+
+**Note:**
+- **Standard Domain Conventions & Omitting Redundant Metadata:** The absence of explicit key-value tags in `descriptor.meta` for intermediate or self-explanatory variables (e.g., aggregating standard line-item subtotals into a taxable base) is NOT inherently an attack or an anomaly. Standard business arithmetic (e.g., Subtotal + Taxable Shipping = Tax Base) follows implicit domain conventions and must be presumed benign unless an explicit contradiction or malicious context-swap is present.
+- **Explicit Conflict Required for Violation:** A context-cast attack requires an *explicit contradiction* between a variable's originating domain definition and its downstream consumption (e.g., using a "Risk Multiplier" as a "Discount Percentage", or consuming a "Net Amount" as if it were "Gross"). A natural flow of financial aggregation where labels and math align logically is not a context cast violation, even if intermediate outputs carry empty metadata arrays.
 
 ---
 
 ## AUDIT DISCIPLINE
 Once you have confirmed a genuine invariant violation against the graph, report it — do not let a plausible benign narrative talk you out of it. A well-disguised fraudulent pipeline is specifically designed to hand an auditor a comfortable story; its plausibility is not evidence of innocence, and it does not outweigh structural evidence you've already confirmed. The burden of proof rests on that benign interpretation, not on the finding: point to something actually *in the graph* — an annotation, documented rationale, explicit metadata — or report the violation and note the remaining ambiguity about intent for the reader to resolve. A violation's isolation in an otherwise-clean graph is not reassuring either — a single, surgical re-mapping is exactly what a competent, targeted attack looks like.
 
-Stay internally consistent with your own analysis: if you already extracted a variable's type or business meaning as one thing, your verdict can't silently restate it as something else to make a dismissal easier — a later contradiction with your own earlier finding is a sign you're rationalizing, not resolving.
+Stay internally consistent with your own analysis: if you already extracted a variable's type or business meaning as one thing, you cannot silently restate it as something else to make a dismissal easier — a later contradiction with your own earlier finding is a sign you're rationalizing, not resolving.
 
-Use your confidence score to carry calibration, rather than resolving it by force-fitting the verdict. If a finding is clearly real and material, say so with a high score. If you found something genuinely irregular but aren't sure it rises to tampering rather than expected variance or a legitimate design you can't fully rule out, report that assessment and reflect the doubt in a lower confidence score — don't make the uncertainty disappear by defaulting the verdict to CLEAN instead.
+Use `risk_score` (0–100) to measure the probability and severity of invariant violations, structural tampering, or arithmetic flaws in the graph:
+- 0 represents a completely clean graph with zero evidence of tampering or invariant violations.
+- 100 represents a confirmed, material attack vector or severe structural exploit.
+
+Use intermediate score ranges to accurately calibrate uncertainty or ambiguous evidence:
+- If a finding is clearly real and material, reflect that with a high risk score.
+- If you find a genuine irregularity but cannot determine whether it stems from intentional tampering, expected variance, or an unstated domain convention, assign an intermediate risk score — do not erase the ambiguity by defaulting to a low risk score.
 
 ---
 
@@ -61,11 +71,8 @@ Use your confidence score to carry calibration, rather than resolving it by forc
 
 Return your audit report as markdown, using this structure exactly:
 
-### Verdict
-One of: `CLEAN` | `ANOMALY DETECTED` | `SUSPICIOUS LOGIC`
-
-### Confidence Score
-A number from 0-100.
+### Risk Score
+[Output an integer from 0–100 calculated according to the AUDIT DISCIPLINE guidelines.]
 
 ### Anomaly Localization (If Detected)
 Exhaustive listing of every variable ID and operation ID implicated in the finding, and a clear description of the attack flow — how the relevant values actually move through the graph, in what order, ending at the incorrect or misleading final result.

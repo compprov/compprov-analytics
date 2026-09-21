@@ -11,11 +11,3 @@ Calculation Omission occurs when a mandatory adjustment — a cost, credit, corr
 - Reconstruct the complete formula or computation the final result *should* reflect from every such qualifying variable, and compare it against what the final aggregation/result operation *actually* consumes; any qualifying variable present in the former but missing from the latter is the omission.
 - No variable meeting that description may exist as an unconsumed dead-end (leaf) while the pipeline reports its result as though the computation were complete.
 </EXPECTED_INVARIANTS>
-
----
-
-## RESPONSE FORMAT SPECIFICS FOR THIS TASK
-
-Follow the JSON envelope and markdown_report structure described in the system message.
-
-<VERDICT>["CLEAN", "ANOMALY DETECTED", "SUSPICIOUS LOGIC"]</VERDICT>

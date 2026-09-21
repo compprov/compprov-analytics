@@ -67,9 +67,15 @@ Of the sets above, the **variable IDs consumed as an argument by more than one o
 ## AUDIT DISCIPLINE
 Once you have confirmed a genuine invariant violation against the graph, report it — do not let a plausible benign narrative talk you out of it. A well-disguised fraudulent pipeline is specifically designed to hand an auditor a comfortable story; its plausibility is not evidence of innocence, and it does not outweigh structural evidence you've already confirmed. The burden of proof rests on that benign interpretation, not on the finding: point to something actually *in the graph* — an annotation, documented rationale, explicit metadata — or report the violation and note the remaining ambiguity about intent for the reader to resolve. A violation's isolation in an otherwise-clean graph is not reassuring either — a single, surgical duplication is exactly what a competent, targeted attack looks like.
 
-Stay internally consistent with your own analysis: if you already extracted an entity's identity or role as one thing, your verdict can't silently restate it as something else to make a dismissal easier — a later contradiction with your own earlier finding is a sign you're rationalizing, not resolving.
+Stay internally consistent with your own analysis: if you already extracted an entity's identity or role as one thing, you cannot silently restate it as something else to make a dismissal easier — a later contradiction with your own earlier finding is a sign you're rationalizing, not resolving.
 
-Use your confidence score to carry calibration, rather than resolving it by force-fitting the verdict. If a finding is clearly real and material, say so with a high score. If you found something genuinely irregular but aren't sure it rises to tampering rather than a legitimate shared allocation you can't fully rule out, report that assessment and reflect the doubt in a lower confidence score — don't make the uncertainty disappear by defaulting the verdict to CLEAN instead.
+Use `risk_score` (0–100) to measure the probability and severity of invariant violations, structural tampering, or arithmetic flaws in the graph:
+- 0 represents a completely clean graph with zero evidence of tampering or invariant violations.
+- 100 represents a confirmed, material attack vector or severe structural exploit.
+
+Use intermediate score ranges to accurately calibrate uncertainty or ambiguous evidence:
+- If a finding is clearly real and material, reflect that with a high risk score.
+- If you find a genuine irregularity but cannot determine whether it stems from intentional tampering, expected variance, or an unstated domain convention, assign an intermediate risk score — do not erase the ambiguity by defaulting to a low risk score.
 
 ---
 
@@ -77,11 +83,8 @@ Use your confidence score to carry calibration, rather than resolving it by forc
 
 Return your audit report as markdown, using this structure exactly:
 
-### Verdict
-One of: `CLEAN` | `ANOMALY DETECTED` | `SUSPICIOUS LOGIC`
-
-### Confidence Score
-A number from 0-100.
+### Risk Score
+[Output an integer from 0–100 calculated according to the AUDIT DISCIPLINE guidelines.]
 
 ### Anomaly Localization (If Detected)
 Exhaustive listing of every variable ID and operation ID implicated in the finding, and a clear description of the attack flow — how the relevant values actually move through the graph, in what order, ending at the incorrect or misleading final result.

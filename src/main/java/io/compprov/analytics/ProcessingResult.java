@@ -1,7 +1,6 @@
 package io.compprov.analytics;
 
 import io.compprov.analytics.ai.Prompt;
-import io.compprov.analytics.ai.PromptProcessingResult;
 import io.compprov.analytics.ai.ReducedPromptProcessingResult;
 
 import java.util.ArrayList;
@@ -11,8 +10,8 @@ import java.util.List;
 /**
  * Accumulates one CPG snapshot's findings as {@code Main.processFile} runs: structural
  * highlights, the two deterministic validity flags (replay and chronology), and — one per
- * {@link Prompt}, if a chat model is configured — the reduced LLM verdict/confidence pair used to
- * build the summary tables.
+ * {@link Prompt}, if a chat model is configured — the reduced LLM risk score used to build the
+ * summary tables.
  */
 public class ProcessingResult {
     private final List<String> highlights = new ArrayList<>();
@@ -30,9 +29,8 @@ public class ProcessingResult {
         highlights.add(highlight);
     }
 
-    /** Records a prompt's LLM result, keeping only verdict and confidence (see {@link ReducedPromptProcessingResult}). */
-    public void addLlmResult(Prompt prompt, PromptProcessingResult llmResult) {
-        llmResults.put(prompt, new ReducedPromptProcessingResult(llmResult.verdict(), llmResult.confidence_score()));
+    public void addLlmResult(Prompt prompt, ReducedPromptProcessingResult llmResult) {
+        llmResults.put(prompt, llmResult);
     }
 
     /** Marks this snapshot's recomputed values as disagreeing with the recorded ones. */
@@ -44,7 +42,7 @@ public class ProcessingResult {
         return highlights;
     }
 
-    /** @return this snapshot's LLM verdicts, keyed by {@link Prompt}, in the order they were processed */
+    /** @return this snapshot's LLM risk scores, keyed by {@link Prompt}, in the order they were processed */
     public LinkedHashMap<Prompt, ReducedPromptProcessingResult> getLlmResults() {
         return llmResults;
     }

@@ -9,8 +9,11 @@ Focus on numerical accuracy, rounding modes, and precision degradation.
 Precision and Scale Tampering occurs when an adversary or faulty business logic exploits how numbers are scaled, rounded, or converted between data types or units. This includes forcibly reducing an intermediate value's scale before completing an aggregation (causing residual value leakage), using a non-standard rounding mode to consistently drain sub-cent fractions into an attacker-controlled pool (Salami Slicing), reducing precision through arbitrary scaling operations, or downcasting a precise decimal type to `float`, `double`, or integer mid-pipeline.
 
 **Note:**
-- Operations may involve integers; ensure that premature integer division (e.g., dividing before multiplying) is not causing precision loss.
-- Calculations may represent an overall operation or a single step within a cyclic process; the presence of a cyclic process is unknown and must be determined by you.
+- Operations may involve primitives, high-precision numeric types, or domain-specific wrapper classes (e.g., custom currency, unit, amount objects or any other datatypes from various domains) where rounding, truncation, and scale constraints are embedded directly in the wrapper's internal context. Verify that premature division or domain-specific wrapper constraints are not causing unintended precision degradation.
+- Calculations may represent an overall operation or a single step within a cyclic process; analyze the CPG context, operation lineage, and descriptors to evaluate potential recurrence.
+- The `risk_score` for potential precision and truncation flaws depends on both materiality and execution context:
+    - **Materiality Override:** A large or high-impact arithmetic error represents a high `risk_score` regardless of cyclicity — a critical precision failure in a single, non-repeating execution is still a material flaw.
+    - **Cyclic Scaling:** For subtle or small-unit rounding/truncation discrepancies, scale your `risk_score` based on your confidence in the operation's cyclic or high-frequency nature: assign a lower risk score if the flaw is isolated and non-cyclic, and increase the score as your confidence grows that the flaw compounds across repeated executions.
 
 Recompute every operation with deep enough precision rational arithmetic and compare against the reported value at each step ($\Delta = |Exact\_Result - Reported\_Result|$). A boundary-sized discrepancy alone is not sufficient for an anomaly verdict — see EXPECTED_INVARIANTS for what actually distinguishes tampering from ordinary rounding.
 
@@ -21,10 +24,3 @@ Recompute every operation with deep enough precision rational arithmetic and com
 - Scale conversions between units must strictly preserve the source asset's native precision and maintain exact arbitrary-precision representations without unhandled intermediate truncations.
 </EXPECTED_INVARIANTS>
 
----
-
-## RESPONSE FORMAT SPECIFICS FOR THIS TASK
-
-Follow the JSON envelope and markdown_report structure described in the system message.
-
-<VERDICT>["CLEAN", "ANOMALY DETECTED", "SUSPICIOUS LOGIC"]</VERDICT>

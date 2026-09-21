@@ -29,7 +29,8 @@ in compprov-core), `compprov-analytics`:
 2. Runs a set of **structural integrity checks** over the graph (see
    [Deterministic checks](#deterministic-checks)) that catch common ways a CPG can be
    manipulated without breaking any single operation's local math.
-3. Optionally sends the snapshot to an LLM under five **fraud-pattern prompts** (see
+3. Optionally sends the snapshot to an LLM under a set of **fraud-pattern prompts** (three run by
+   default, covering six named attack patterns — see
    [LLM-based fraud analysis](#llm-based-fraud-analysis)) that reason about the graph's topology
    and lineage rather than just its arithmetic.
 4. Writes per-file findings plus an aggregated summary under a fresh, timestamped run directory
@@ -63,6 +64,7 @@ java -jar compprov-analytics.jar \
   [--plugin=<path-to-plugin-jar> ...] \
   [--executePrompts=<true/false>] \
   [--intercallTimeoutMs=<ms>] \
+  [--thresholds=<clean>,<suspicious>] \
   [--llmTemplates=<name>[,<name>...]] \
   [--<templateKey>=<path> ...]
 ```
@@ -73,7 +75,8 @@ java -jar compprov-analytics.jar \
 | `--cpgfolder=<path>` | Yes, at least one `--cpgpath`/`--cpgfolder`                                                      | Directory to scan recursively for `*.json` CPG files (extension matched case-insensitively); every match is processed as a separate file. Repeatable. |
 | `--plugin=<path>` | No                                                                                               | Path to a plugin jar providing `EnvironmentCustomizer` and/or `ChatModel` implementations (see [Plugins](#plugins)). Repeatable.   |
 | `--executePrompts=<true/false>` | No, default `true`                                                                               | When `false`, prompt execution is skipped even if a `ChatModel` was supplied by a plugin.                                          |
-| `--intercallTimeoutMs=<ms>` | No, default `0`                                                                                  | Pause inserted before each LLM call, to stay under a provider's rate limit when a snapshot triggers all five prompts back to back. |
+| `--intercallTimeoutMs=<ms>` | No, default `0`                                                                                  | Pause inserted before each LLM call, to stay under a provider's rate limit when a snapshot triggers all active prompts back to back. |
+| `--thresholds=<clean>,<suspicious>` | No, default `25,70`                                                                              | Overrides the `risk_score` cutoffs used to derive the displayed verdict label: below `<clean>` is `CLEAN`, below `<suspicious>` is `SUSPICIOUS LOGIC`, otherwise `ANOMALY DETECTED`. `<clean>` must fall within `(0, 100)` and `<suspicious>` within `(<clean>, 100]`, matching `risk_score`'s own 0-100 range; an invalid pair is logged and ignored, leaving the defaults in effect. |
 | `--llmTemplates=<names>` | No, default: `topological_fraud`, `precision_tampering`, `semantic_type_and_context_cast_attack` | Comma-separated list of prompt names to generate/execute, e.g. `calculation_omission,precision_tampering` (see [LLM-based fraud analysis](#llm-based-fraud-analysis) for the full list of names). |
 | `--<templateKey>=<path>` | No, repeatable                                                                                   | Overrides a bundled prompt template with a file from disk, e.g. `--calculation_omission_user=/path/to/my_template.md` replaces the bundled `calculation_omission_user.md`. Run with no arguments to print the full list of valid template keys. |
 
@@ -104,33 +107,40 @@ These checks are graph-shape checks, not domain checks — they don't know what 
 
 ## LLM-based fraud analysis
 
-For every snapshot, `compprov-analytics` runs it through five prompts defined in
-`io.compprov.analytics.ai.Prompt`, each describing a distinct provenance-fraud pattern for the
-model to look for:
+`compprov-analytics` defines six named attack patterns in `io.compprov.analytics.ai.Prompt`, but
+only **three run by default** — `topological_fraud` is a single merged prompt covering the three
+path-multiplicity patterns (calculation omission, lineage disconnection, double counting) that
+used to be three separate calls, so the three legacy single-pattern prompts are still bundled as
+templates but excluded from the default `activePrompts` list:
 
-| Prompt                | `--llmTemplates=` name | Attack pattern                                                                                                                                               |
-|-----------------------|---|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Calculation omission  | `calculation_omission` | A mandatory adjustment (cost, credit, or cross-check — financial or not) is computed correctly in an isolated subgraph but never wired into the final result |
-| Lineage disconnection | `lineage_disconnection_and_context_substitution` | Context substitution / a value's causal chain is silently rerouted or severed                                                                                |
-| Precision tampering   | `precision_tampering` | Rounding or precision is manipulated to shift the result in a favorable direction                                                                            |
-| Semantic violation    | `semantic_type_and_context_cast_attack` | A value is cast or reinterpreted across an incompatible semantic type/context                                                                                |
-| Double counting       | `topological_accumulation_fraud_via_double_counting` | A value flows into the final result through more than one path, inflating or deflating the total                                                             |
-| Topological fraud     | `topological_fraud` | Common prompt for `topological_accumulation_fraud_via_double_counting`, `lineage_disconnection_and_context_substitution` and  `calculation_omission attacks`       |
+| Prompt                | `--llmTemplates=` name | Default | Attack pattern                                                                                                                                               |
+|-----------------------|---|:---:|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Topological fraud     | `topological_fraud` | ✓ | Merged prompt for the three path-multiplicity patterns below: a value's causal path count into the terminal result is 0 (omission), >1 (double counting), or 1 but from the wrong source (lineage disconnection) |
+| Precision tampering   | `precision_tampering` | ✓ | Rounding or precision is manipulated to shift the result in a favorable direction                                                                            |
+| Semantic violation    | `semantic_type_and_context_cast_attack` | ✓ | A value is cast or reinterpreted across an incompatible semantic type/context                                                                                |
+| Calculation omission  | `calculation_omission` |  | A mandatory adjustment (cost, credit, or cross-check — financial or not) is computed correctly in an isolated subgraph but never wired into the final result |
+| Lineage disconnection | `lineage_disconnection_and_context_substitution` |  | Context substitution / a value's causal chain is silently rerouted or severed                                                                                |
+| Double counting       | `topological_accumulation_fraud_via_double_counting` |  | A value flows into the final result through more than one path, inflating or deflating the total                                                             |
 
-All five run by default; pass `--llmTemplates=` with a comma-separated subset of the names above
-to only generate/execute those.
+Pass `--llmTemplates=` with a comma-separated subset of the names above to change which run — e.g.
+`--llmTemplates=calculation_omission,lineage_disconnection_and_context_substitution,topological_accumulation_fraud_via_double_counting,precision_tampering,semantic_type_and_context_cast_attack`
+reverts to the original five-prompt, one-pattern-per-call behavior instead of the merged
+`topological_fraud` prompt, at the cost of an extra LLM call per snapshot. Because the three
+path-multiplicity patterns share a single prompt by default, a positive `topological_fraud`
+verdict doesn't by itself say *which* of the three patterns was found — see that prompt's own
+report for the specific mechanism (omission/duplication/substitution) it identified.
 
 Each prompt has a **standalone markdown template** (`src/main/resources/prompts/markdown/`) for
 the no-chat-model path, and a **JSON-mode pair** (`src/main/resources/prompts/json/`) for the
 chat-model path:
 
-- `json/shared_system.md` — one file shared by all five prompts: role, CPG format spec, the
+- `json/shared_system.md` — one file shared by every active prompt: role, CPG format spec, the
   actual `<CPG>` data, structural reference data (root/leaf/multi-used/duplicate-named-leaf ID
-  lists), audit discipline, and the response format. It's identical across all five calls for a
-  given snapshot, so a `ChatModel` that supports system-message caching (e.g. Anthropic's
+  lists), audit discipline, and the response format. It's identical across every call for a given
+  snapshot, so a `ChatModel` that supports system-message caching (e.g. Anthropic's
   `cacheSystemMessages`) only pays to process it once per file.
-- `json/<prompt>_user.md` — the attack-specific half: objective, attack definition, invariants,
-  and the `<VERDICT>` array of values valid for that prompt.
+- `json/<prompt>_user.md` — the attack-specific half: objective, attack definition, and invariants
+  for that prompt.
 
 Both the markdown and JSON-mode templates substitute the same placeholders (`$CPG$`,
 `$ROOT_VARIABLE_IDS$`, `$LEAF_VARIABLE_IDS$`, `$MULTIUSED_VARIABLE_IDS$`,
@@ -147,10 +157,21 @@ of your choice by hand — and the corresponding column in the aggregate summary
 
 **With a chat model** (see [Plugins](#plugins)), the tool sends `shared_system.md` and each
 prompt's `<prompt>_user.md` as a `SystemMessage`/`UserMessage` pair, and expects a JSON response
-matching `PromptProcessingResult(verdict, confidence_score, markdown_report)`. The raw JSON is
-saved as `<prompt>_result.json`, and `markdown_report` is rendered into `<prompt>_result.md` via
-`templates/markdown_result.md`. Every prompt's `verdict`/`confidence_score` also feeds into that
-file's row and the aggregate overview table.
+matching `PromptProcessingResult(risk_score, markdown_report)` — a single continuous `risk_score`
+(0–100) rather than a discrete verdict enum, so the model isn't forced to pick a coarse label
+before it's actually sure which side of a fuzzy line a finding falls on. The raw JSON is saved as
+`<prompt>_result.json`, and `markdown_report` is rendered into `<prompt>_result.md` via
+`templates/markdown_result.md`. `compprov-analytics` itself derives a `CLEAN` / `SUSPICIOUS LOGIC`
+/ `ANOMALY DETECTED` label from `risk_score` using the `--thresholds=` cutoffs (see
+[Usage](#usage)); both the numeric score and the derived label feed into that file's row and the
+aggregate overview table.
+
+If a model's response can't be parsed as JSON at all, a last-resort fallback slices out just the
+`risk_score` and `markdown_report` fields textually so a result is still recovered (with a
+placeholder report) rather than the whole file failing. `risk_score` is contractually 0-100: a
+missing/non-numeric value causes that one prompt to be skipped (logged, result omitted from the
+tables) rather than failing the whole file, and a value outside 0-100 is clamped rather than
+propagated as-is.
 
 ## Plugins
 
@@ -200,8 +221,12 @@ previous run is overwritten:
     │   # Chat model configured (via --plugin):
     ├── system_prompt.md                    Shared system prompt — written once per file, not per prompt
     ├── <prompt>_user_prompt.md             This prompt's user message
-    ├── <prompt>_result.json                Raw LLM response
-    └── <prompt>_result.md                  Rendered verdict + confidence + report
+    ├── <prompt>_call_details.json          Call metadata: request time, duration, model name, response id,
+    │                                        finish reason, and token usage — written even if the response
+    │                                        couldn't be parsed (the messages themselves are in
+    │                                        system_prompt.md / <prompt>_user_prompt.md above)
+    ├── <prompt>_result.json                Raw LLM response (risk_score + markdown_report)
+    └── <prompt>_result.md                  Rendered risk score + derived verdict label + report
 ```
 
 Input and Output samples are available here: https://github.com/compprov/compprov-plugin-example/tree/master/samples/

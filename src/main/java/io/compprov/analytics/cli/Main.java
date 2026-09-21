@@ -5,6 +5,7 @@ import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.output.FinishReason;
 import io.compprov.analytics.ProcessingResult;
+import io.compprov.analytics.ai.CallDetails;
 import io.compprov.analytics.ai.Prompt;
 import io.compprov.analytics.ai.PromptProcessingResult;
 import io.compprov.analytics.ai.ReducedPromptProcessingResult;
@@ -50,7 +51,7 @@ import java.util.logging.Logger;
  * computation via compprov-core, runs a set of deterministic structural checks (replay mismatch,
  * orphaned/duplicate-named leaves, unused roots, multiple math contexts, multi-used variables,
  * scaling operations, chronology violations), and — if a {@link ChatModel} was supplied by a
- * {@code --plugin} — sends the graph through five LLM fraud-pattern prompts defined in
+ * {@code --plugin} — sends the graph through the active LLM fraud-pattern prompts defined in
  * {@link Prompt}. Every run's output is written under a timestamped {@code <run>/out/} directory
  * so repeated runs never overwrite each other.
  */
@@ -63,14 +64,11 @@ public class Main {
     private static boolean executePrompts = true;
     private static int intercallTimeoutMs = 0;
     private static List<Prompt> activePrompts = List.of(Prompt.TOPOLOGICAL_FRAUD, Prompt.PRECISION_TAMPERING, Prompt.SEMANTIC_VIOLATION);
+    private static Double cleanThreshold = 25.0;
+    private static Double suspiciousThreshold = 70.0;
     private static final Map<String, String> templateOverrides = new HashMap<>();
     private static final Set<String> TEMPLATE_OVERRIDE_KEYS = templateOverrideKeys();
 
-    /**
-     * All valid {@code --<key>=<path>} template-override keys: each {@link Prompt}'s markdown and
-     * JSON user template, plus the shared JSON system template. See {@link Prompt#markdownTemplateKey()},
-     * {@link Prompt#jsonUserTemplateKey()}, {@link Prompt#sharedJsonSystemTemplateKey()}.
-     */
     private static Set<String> templateOverrideKeys() {
         final var keys = new java.util.HashSet<String>();
         keys.add(Prompt.sharedJsonSystemTemplateKey());
@@ -108,16 +106,6 @@ public class Main {
         LOGGER.addHandler(handler);
     }
 
-    /**
-     * Parses CLI arguments, applies any {@code --plugin} jars, then processes every
-     * {@code --cpgpath} snapshot and writes the per-file and aggregate reports. Prints usage and
-     * exits with status {@code 1} if no arguments are given.
-     *
-     * @param args {@code --cpgpath=}, {@code --cpgfolder=}, {@code --plugin=},
-     *             {@code --executePrompts=}, {@code --intercallTimeoutMs=}, {@code --llmTemplates=},
-     *             and per-template {@code --<templateKey>=<path>} override arguments; see the
-     *             printed usage for details
-     */
     public static void main(String[] args) {
 
         //no args
@@ -129,6 +117,10 @@ public class Main {
                       --plugin=<path>             Path to a plugin JAR providing EnvironmentCustomizer/ChatModel implementations. Optional, repeatable.
                       --executePrompts=true/false Default true. False will skip prompt execution even if ChatModel is set.
                       --intercallTimeoutMs=<ms>   Pause (in milliseconds) before each chat model call. Optional, defaults to 0.
+                      --thresholds=<clean>,<suspicious> Overrides the risk_score cutoffs used to derive the CLEAN/SUSPICIOUS LOGIC/ANOMALY DETECTED
+                                                  verdict label (a risk_score below <clean> is CLEAN, below <suspicious> is SUSPICIOUS LOGIC,
+                                                  otherwise ANOMALY DETECTED). Optional, defaults to 25,70. <clean> must be within (0, 100)
+                                                  and <suspicious> within (<clean>, 100].
                       --llmTemplates=<names>      Comma-separated template names to generate/execute, e.g. calculation_omission,precision_tampering.
                                                   Optional; defaults to all: %s
                       --<templateKey>=<path>      Override a bundled prompt template with a file from disk, e.g.
@@ -163,6 +155,26 @@ public class Main {
                     executePrompts = Boolean.parseBoolean(arg.substring("--executePrompts=".length()));
                 } catch (Throwable th) {
                     LOGGER.log(Level.SEVERE, "Unable to parse executePrompts: " + arg, th);
+                }
+            }
+            if (arg.startsWith("--thresholds=")) {
+                try {
+                    final var parts = arg.substring("--thresholds=".length()).split(",");
+                    if (parts.length != 2) {
+                        throw new IllegalArgumentException("expected exactly two comma-separated values, e.g. --thresholds=30,80");
+                    }
+                    final var clean = Double.parseDouble(parts[0].trim());
+                    final var suspicious = Double.parseDouble(parts[1].trim());
+                    if (clean <= 0 || clean >= 100) {
+                        throw new IllegalArgumentException("clean threshold must be within (0, 100), got " + clean);
+                    }
+                    if (suspicious <= clean || suspicious > 100) {
+                        throw new IllegalArgumentException("suspicious threshold must be within (clean, 100], got " + suspicious);
+                    }
+                    cleanThreshold = clean;
+                    suspiciousThreshold = suspicious;
+                } catch (Throwable th) {
+                    LOGGER.log(Level.SEVERE, "Unable to parse thresholds: " + arg, th);
                 }
             }
             if (arg.startsWith("--cpgpath=")) {
@@ -236,13 +248,6 @@ public class Main {
         LOGGER.info("Processing is done, the report is saved into " + prepath + "/summary.md");
     }
 
-    /**
-     * Recursively scans {@code folderPath} for files whose extension is {@code .json}
-     * (case-insensitive), each treated as a separate CPG snapshot to process.
-     *
-     * @return the matching file paths, sorted for deterministic processing order
-     * @throws IOException if {@code folderPath} doesn't exist, isn't a directory, or can't be walked
-     */
     private static List<String> scanCpgFolder(String folderPath) throws IOException {
         final var dir = Path.of(folderPath);
         if (!Files.isDirectory(dir)) {
@@ -258,10 +263,6 @@ public class Main {
         }
     }
 
-    /**
-     * Builds the top-level {@code summary.md}: an overview table (one row per processed file,
-     * one column per {@link Prompt}) followed by every file's structural highlights.
-     */
     private static String aggregateResults(Map<String, ProcessingResult> results) {
         final var sb = new StringBuilder();
         sb.append("# Compprov Analytics Summary\n\n");
@@ -309,7 +310,7 @@ public class Main {
                     sb.append(" — |");
                 } else {
                     sb.append(" ").append(llmResult.verdict())
-                            .append(" (").append(llmResult.confidenceScore()).append(") |");
+                            .append(" (").append(llmResult.riskScore()).append(") |");
                 }
             }
             sb.append("\n");
@@ -354,11 +355,6 @@ public class Main {
         return sb.toString();
     }
 
-    /**
-     * Builds one file's {@code summary.md}: calculation/chronology validity, structural
-     * highlights, and either a table of verdicts (chat model active) or a pointer to each
-     * prompt file for manual use (no chat model).
-     */
     private static String buildFileSummary(String filename, ProcessingResult result) {
         final var sb = new StringBuilder();
         sb.append("# Compprov Analytics Report: ").append(filename).append("\n\n");
@@ -404,7 +400,7 @@ public class Main {
                 } else {
                     sb.append("| ").append(prompt.getDescription())
                             .append(" | ").append(llmResult.verdict())
-                            .append(" | ").append(llmResult.confidenceScore())
+                            .append(" | ").append(llmResult.riskScore())
                             .append(" | `").append(prompt.markdownResultFilename()).append("` |\n");
                 }
             }
@@ -414,15 +410,6 @@ public class Main {
         return sb.toString();
     }
 
-    /**
-     * Loads {@code pluginAddress} into a child {@link URLClassLoader} and applies every
-     * {@link EnvironmentCustomizer} and {@link ChatModel} it declares via
-     * {@code META-INF/services}. A later plugin's {@code ChatModel} silently replaces an earlier
-     * one; {@link EnvironmentCustomizer}s are cumulative.
-     *
-     * @param pluginAddress path to the plugin jar, as passed to {@code --plugin=}
-     * @throws IOException if the jar doesn't exist or can't be read
-     */
     private static void processPlugin(String pluginAddress) throws IOException {
         final var jarFile = new File(pluginAddress);
         if (!jarFile.exists()) {
@@ -466,16 +453,6 @@ public class Main {
         }
     }
 
-    /**
-     * Runs every deterministic structural check on one CPG snapshot, writing the offending
-     * variables/operations for each hit to its own JSON file under {@code <prepath>/<fileAddress's
-     * name>/}, then — if a chat model is configured — runs the snapshot through all five
-     * {@link Prompt}s (see {@link #processPrompt}).
-     *
-     * @param prepath     the timestamped run directory (see {@link #main})
-     * @param fileAddress path to the CPG snapshot JSON to process
-     * @return the accumulated highlights, validity flags, and LLM verdicts for this file
-     */
     private static ProcessingResult processFile(String prepath, int fileId, String fileAddress) {
 
         //read file
@@ -685,22 +662,21 @@ public class Main {
         for (int i = 0; i < activePrompts.size(); i++) {
             final var prompt = activePrompts.get(i);
             final var r = processPrompt(path, snapshotStr, prompt, sharedSystemText, rootIds, leafIds, multiUsedIds, duplicateNameLeafIds);
+            final var riskScore = r.isEmpty() ? 0 : r.get().risk_score();
+            final var verdict = r.isEmpty() ? "-" : toVerdict(riskScore);
             LOGGER.info("Prompt %d of %d: %s. Verdict: %s(%.2f)".formatted(
                     i + 1,
                     activePrompts.size(),
                     prompt.getDescription(),
-                    r.isEmpty() ? "-" : r.get().verdict(),
-                    r.isEmpty() ? 0 : r.get().confidence_score()));
-            r.ifPresent(promptProcessingResult -> result.addLlmResult(prompt, promptProcessingResult));
+                    verdict,
+                    riskScore));
+            r.ifPresent(promptProcessingResult -> result.addLlmResult(prompt, new ReducedPromptProcessingResult(verdict, riskScore)));
         }
 
         save(ENV.getMapper().writerWithDefaultPrettyPrinter().writeValueAsString(result.getHighlights()), path + "/highlights.json");
         return result;
     }
 
-    /**
-     * Pretty-prints {@code data} via compprov-core's Jackson mapper.
-     */
     private static String serialize(Object data) {
         try {
             return ENV.getMapper().writerWithDefaultPrettyPrinter().writeValueAsString(data);
@@ -709,9 +685,6 @@ public class Main {
         }
     }
 
-    /**
-     * Writes {@code data} to {@code address}, creating parent-less files and overwriting any existing content.
-     */
     private static void save(String data, String address) {
         try {
             Files.writeString(new File(address).toPath(), data,
@@ -723,11 +696,6 @@ public class Main {
         }
     }
 
-    /**
-     * Formats a list of variables as a prompt-friendly {@code [id1, id2, ...]} string, or
-     * {@code "[] (none detected)"} if empty — used for the root/leaf/multi-used ID lists
-     * substituted into the prompt templates.
-     */
     private static String formatIdList(java.util.List<Snapshot.Variable> variables) {
         if (variables.isEmpty()) {
             return "[] (none detected)";
@@ -737,18 +705,6 @@ public class Main {
                 .collect(java.util.stream.Collectors.joining(", ", "[", "]"));
     }
 
-    /**
-     * Runs a single {@link Prompt} against one snapshot. With no chat model configured, this
-     * only renders the standalone markdown prompt for manual use and returns empty. With a chat
-     * model, it sends {@code sharedSystemText} and the prompt's own user template as separate
-     * {@code SystemMessage}/{@code UserMessage}s (so the large, per-file-constant system content
-     * can be cached across all five calls), then parses the JSON response — falling back to
-     * {@link #tryExtractMarkdownedJson} / {@link #tryExtractJsonByFields} if the model didn't
-     * return clean JSON — and renders the markdown result file.
-     *
-     * @return the parsed result, or empty if no chat model is configured, the response was
-     * empty/unparseable, or the file couldn't be written
-     */
     private static Optional<PromptProcessingResult> processPrompt(String path, String snapshotStr, Prompt prompt,
                                                                   String sharedSystemText, String rootIds, String leafIds,
                                                                   String multiUsedIds, String duplicateNameLeafIds) {
@@ -776,9 +732,24 @@ public class Main {
                 Thread.sleep(intercallTimeoutMs);
             }
 
+            final var requestedAt = Instant.now();
             final var chatResponse = chatModel.chat(List.of(new SystemMessage(sharedSystemText), new UserMessage(userText)));
+            final var durationMs = Instant.now().toEpochMilli() - requestedAt.toEpochMilli();
             final var finishReason = chatResponse.finishReason();
             final var resultStr = chatResponse.aiMessage() != null ? chatResponse.aiMessage().text() : null;
+
+            final var tokenUsage = chatResponse.tokenUsage();
+            //TODO: cached token details are not provided
+            final var callDetails = new CallDetails(
+                    requestedAt.toString(),
+                    durationMs,
+                    chatResponse.modelName(),
+                    chatResponse.id(),
+                    finishReason != null ? finishReason.toString() : null,
+                    tokenUsage != null ? tokenUsage.inputTokenCount() : null,
+                    tokenUsage != null ? tokenUsage.outputTokenCount() : null,
+                    tokenUsage != null ? tokenUsage.totalTokenCount() : null);
+            save(serialize(callDetails), path + "/" + prompt.callDetailsFilename());
 
             if (resultStr == null || resultStr.isBlank()) {
                 LOGGER.log(Level.SEVERE, "Empty response for prompt: " + prompt.getDescription()
@@ -811,10 +782,16 @@ public class Main {
                 }
             }
 
+            if (result.risk_score() == null || result.risk_score().isNaN()) {
+                LOGGER.log(Level.SEVERE, "Prompt " + prompt.getDescription() + " returned no usable risk_score. Response saved into " + prompt.jsonResultFilename());
+                return Optional.empty();
+            }
+            result = clampRiskScore(result, prompt);
+
             try (final var is = Main.class.getResourceAsStream("/templates/markdown_result.md")) {
                 final var markdownResult = new String(is.readAllBytes())
-                        .replace("$VERDICT$", result.verdict())
-                        .replace("$SCORE$", Double.toString(result.confidence_score()))
+                        .replace("$VERDICT$", toVerdict(result.risk_score()))
+                        .replace("$SCORE$", Double.toString(result.risk_score()))
                         .replace("$MARKDOWN$", result.markdown_report());
                 save(markdownResult, path + "/" + prompt.markdownResultFilename());
             }
@@ -824,21 +801,33 @@ public class Main {
         }
     }
 
-    /**
-     * Last-resort fallback when {@code resultStr} isn't valid JSON at all: slices out just the
-     * {@code verdict} and {@code confidence_score} fields by locating the {@code "verdict"} and
-     * {@code "markdown_report"} keys textually and re-wrapping the fragment between them as a
-     * small JSON object with a placeholder report. Recovers a verdict/score even when the
-     * model's free-form response can't be parsed any other way, at the cost of losing the
-     * detailed report (the raw response is still saved separately).
-     *
-     * @return the recovered result, or {@code null} if the fields can't be located or the
-     * reconstructed fragment still isn't valid JSON
-     */
+    /** risk_score is contractually 0-100, but models occasionally overshoot; clamp rather than propagate a bad value. */
+    private static PromptProcessingResult clampRiskScore(PromptProcessingResult result, Prompt prompt) {
+        final var raw = result.risk_score();
+        final var clamped = Math.max(0.0, Math.min(100.0, raw));
+        if (clamped != raw) {
+            LOGGER.log(Level.WARNING, "Prompt " + prompt.getDescription() + " returned risk_score=" + raw + " outside [0, 100]; clamped to " + clamped);
+            return new PromptProcessingResult(clamped, result.markdown_report());
+        }
+        return result;
+    }
+
+    private static String toVerdict(Double riskScore) {
+        if (riskScore < cleanThreshold) {
+            return "CLEAN";
+        }
+
+        if (riskScore < suspiciousThreshold) {
+            return "SUSPICIOUS LOGIC";
+        }
+
+        return "ANOMALY DETECTED";
+    }
+
     private static PromptProcessingResult tryExtractJsonByFields(String resultStr) {
         try {
-            final var verdict = resultStr.indexOf("\"verdict\"");
-            if (verdict < 0) {
+            final var riskScore = resultStr.indexOf("\"risk_score\"");
+            if (riskScore < 0) {
                 return null;
             }
 
@@ -847,7 +836,7 @@ public class Main {
                 return null;
             }
 
-            final var properJsonStr = "{ " + resultStr.substring(verdict, markdownreport) + "\"markdown_report\": \"failed to parse, see json output for details\" }";
+            final var properJsonStr = "{ " + resultStr.substring(riskScore, markdownreport) + "\"markdown_report\": \"failed to parse, see json output for details\" }";
             final var r = ENV.getMapper().readValue(properJsonStr, PromptProcessingResult.class);
             LOGGER.info("Processed output manually, extracted payload without detailed report, but raw response is saved");
             return r;
@@ -856,14 +845,6 @@ public class Main {
         }
     }
 
-    /**
-     * Fallback for when the model wraps its JSON response in a ```json fenced code block instead
-     * of returning bare JSON (despite the prompt asking it not to) — extracts and parses just the
-     * fenced content.
-     *
-     * @return the parsed result, or {@code null} if there's no fenced block or its content isn't
-     * valid JSON
-     */
     private static PromptProcessingResult tryExtractMarkdownedJson(String resultStr) {
         try {
             var start = resultStr.indexOf("```json");
