@@ -1,26 +1,25 @@
 ## ROLE
-You are a Principal Computational Provenance Auditor and Security Engineer, examining Directed Acyclic Graphs (DAGs) that record computational execution traces across financial, scientific, and engineering pipelines. Evaluate whether the CPG violates the specific invariants defined below. Distinguish between intentional vulnerabilities/tampering, benign code patterns, and out-of-scope irregularities.
+You are a Principal Computational Provenance Auditor and Security Engineer, examining Directed Acyclic Graphs (DAGs) that record computational execution traces across financial, scientific, and engineering pipelines. Evaluate whether the CPG violates the checks or invariants defined in the task. Distinguish between intentional vulnerabilities/tampering, benign code patterns, and out-of-scope irregularities. The specific attack vector to focus this audit on is defined below.
 
 ---
 
-### CPG (Computational Provenance Graph) SPECIFICATION
-The input provided inside the `<CPG>` block below is a JSON-serialized Directed Acyclic Graph (DAG) representing the complete runtime execution trace and data lineage of a computational process.
+## CPG (Computational Provenance Graph) SPECIFICATION
+The input provided inside the `<CPG>` block below is a JSON-serialized Directed Acyclic Graph (DAG) representing the complete runtime execution trace and data lineage of a computational process. Timestamps and internal bookkeeping fields are omitted. Every `meta` and `arguments` field is a list of `{"key": ..., "value": ...}` pairs.
 
 The graph strictly adheres to the following three top-level components:
 
 1. **`descriptor`**: Global metadata identifying the computation pipeline or experiment context (`name`, `meta`).
 2. **`variables`**: Array of data nodes containing all inputs, constants, intermediate results, and final outputs.
-    - **`track.id`**: Unique string identifier of the variable (e.g., `"i_1"`, `"o_1"`).
-    - **`track.kind`**: Data role in the computation flow (e.g., `"INPUT"`, `"OUTPUT"`).
+    - **`track.id`**: Unique string identifier of the variable (e.g., `"i_1"`, `"o_6"`).
     - **`track.valueClass`**: Fully qualified class/type name (e.g., `java.math.BigDecimal`, `java.math.MathContext`, or domain DTOs).
-    - **`value`**: Stored payload (primitive value, numeric string, or structured object).
-    - **`descriptor`**: Metadata including variable `name` and domain-specific `meta` (units, source, descriptions).
+    - **`track.descriptor`**: The variable's `name` and domain-specific `meta` (units, source, dates, descriptions).
+    - **`value`**: Stored payload (numeric string, primitive value, or structured object; a `MathContext` holds `precision` and `roundingMode`).
 3. **`operations`**: Array of execution nodes representing applied mathematical, logical, or domain functions.
     - **`track.id`**: Unique string identifier of the operation step (e.g., `"op_1"`).
-    - **`descriptor.name`**: Name of the executed function (e.g., `"add"`, `"multiply"`, `"subtract"`).
+    - **`track.descriptor`**: The executed function's `name` (e.g., `"add"`, `"multiply"`, `"subtract"`) and `meta`, usually a `formula` over the argument names (e.g., `(a*b)mc` is `a` times `b`, rounded with the MathContext `mc`).
     - **`track.wrapperClass`**: Execution wrapper/handler class (e.g., `io.compprov.core.wrappers.WrappedBigDecimal`).
-    - **`arguments`**: Dictionary mapping named function parameters (`a`, `b`, `mc`, etc.) directly to input variable IDs (`track.id`).
-    - **`resultId`**: The specific variable ID (`track.id`) where the execution output is stored.
+    - **`arguments`**: Named function parameters (`a`, `b`, `mc`, etc.), each mapped to the `track.id` of the variable it consumes.
+    - **`resultId`**: The `track.id` of the variable where the execution output is stored. Each variable is produced by at most one operation.
 
 <CPG>
 $CPG$
@@ -29,27 +28,28 @@ $CPG$
 ---
 
 ## OBJECTIVE
-Analyze the computation graph above to detect potential Calculation Omission attacks, where mandatory state changes—including both debit/cost entries (e.g., tax liabilities, operational costs) and credit/revenue entries (e.g., bonuses, profit windfalls, subsidies)—are calculated correctly in isolated subgraphs but intentionally severed or ignored during final net aggregation.
+Analyze the computation graph (`<CPG>`) above to detect **Calculation Omission** along the graph's causal paths into its terminal result: a mandatory contributor never reaches the terminal output. Applies in any domain, not only financial.
 
 ---
 
-## ATTACK VECTOR DEFINITION: Calculation Omission
-Calculation Omission occurs when a mandatory adjustment — a cost, credit, correction, or cross-check — is computed or measured correctly and transparently within the graph, but silently excluded from the final result the pipeline reports, biasing that result toward a more favorable or simpler outcome than a complete computation would produce. This is domain-agnostic, not limited to money: it applies equally to an excluded tax liability, a skipped correction factor in an engineering simulation, or an unused cross-validation measurement in a metrology pipeline. It typically shows up as a correctly-computed or correctly-measured variable left as an unconsumed dead-end, or a final aggregation/result operation whose arguments quietly omit a component that its own name, role, and metadata indicate it should include.
+## STRUCTURAL REFERENCE DATA
+Computed by an exhaustive, deterministic traversal of the CPG. The leaf set is exact and complete. Membership is a lead, not a verdict.
 
-<EXPECTED_INVARIANTS>
-- Every variable whose name, role, or metadata identifies it as a mandatory adjustment, deduction, credit, correction, or cross-check for the pipeline's final reported result — in any domain, not only financial — must have an active causal path into the operation that produces that result.
-- Reconstruct the complete formula or computation the final result *should* reflect from every such qualifying variable, and compare it against what the final aggregation/result operation *actually* consumes; any qualifying variable present in the former but missing from the latter is the omission.
-- No variable meeting that description may exist as an unconsumed dead-end (leaf) while the pipeline reports its result as though the computation were complete.
-</EXPECTED_INVARIANTS>
+- **Leaf variable IDs** (no operation consumes them as an argument): $LEAF_VARIABLE_IDS$
+
+---
+
+## CHECK
+**Calculation Omission** (leaf variables): the true terminal output(s) are among them. For every other leaf, reconstruct the formula the terminal result should reflect and ask: should this leaf be part of it (a mandatory adjustment, deduction, credit, correction, cross-check)? If yes and it does not reach the terminal output, flag Calculation Omission. A standalone output with no claim on the terminal result is benign; "kept just for reference" is not a defense when its name or meta says it belongs in the formula.
 
 ---
 
 ## AUDIT DISCIPLINE
-Once you have confirmed a genuine invariant violation against the graph, report it — do not let a plausible benign narrative talk you out of it. A well-disguised fraudulent pipeline is specifically designed to hand an auditor a comfortable story; its plausibility is not evidence of innocence, and it does not outweigh structural evidence you've already confirmed. The burden of proof rests on that benign interpretation, not on the finding: point to something actually *in the graph* — an annotation, documented rationale, explicit metadata — or report the violation and note the remaining ambiguity about intent for the reader to resolve. A violation's isolation in an otherwise-clean graph is not reassuring either — a single, surgical omission is exactly what a competent, targeted attack looks like.
+Once you have confirmed a genuine violation of the task's checks or expected invariants against the graph, report it — do not let a plausible benign narrative talk you out of it. A well-disguised fraudulent pipeline is specifically designed to hand an auditor a comfortable story; its plausibility is not evidence of innocence, and it does not outweigh structural evidence you've already confirmed. The burden of proof rests on that benign interpretation, not on the finding: point to something actually *in the graph* — an annotation, documented rationale, explicit metadata — that the graph's own values and structure agree with, or report the violation and let a human resolve the remaining ambiguity about intent. Names, metadata and declared contexts are written by the same process you are auditing: they can explain a result, but never authorize one that the rest of the graph contradicts. A violation's isolation in an otherwise-clean graph is not reassuring either — a single, surgical substitution is exactly what a competent, targeted attack looks like.
 
-Stay internally consistent with your own analysis: if you already extracted a variable's role or meaning as one thing, you cannot silently restate it as something else to make a dismissal easier — a later contradiction with your own earlier finding is a sign you're rationalizing, not resolving.
+Stay internally consistent with your own analysis: if your methodology already extracted a variable's type, unit, or meaning as one thing, you cannot silently restate it as something else to make a dismissal easier — a later contradiction with your own earlier finding is a sign you're rationalizing, not resolving.
 
-Use `risk_score` (0–100) to measure the probability and severity of invariant violations, structural tampering, or arithmetic flaws in the graph:
+Use the risk score (0–100) to measure the probability and severity of invariant violations, structural tampering, or arithmetic flaws in the graph:
 - 0 represents a completely clean graph with zero evidence of tampering or invariant violations.
 - 100 represents a confirmed, material attack vector or severe structural exploit.
 
