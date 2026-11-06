@@ -378,7 +378,7 @@ public class Main {
         if (promptProcessingMode == PromptProcessingMode.GENERATE_MARKDOWN) {
             appendManualPromptsSection(sb);
         } else {
-            sb.append("| Prompt | Verdict | Confidence | Report |\n|---|---|---|---|\n");
+            sb.append("| Prompt | Verdict | Risk Score | Report |\n|---|---|---|---|\n");
             for (var prompt : activePrompts) {
                 final var llmResult = result.getLlmResults().get(prompt);
                 if (result.isFailed() || (llmResult != null && llmResult.isFailed())) {
