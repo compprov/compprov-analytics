@@ -234,8 +234,12 @@ smaller than the input reduction.
 
 ## Evaluation
 
-The prompts were evaluated on 116 CPG snapshots, available with all run outputs in
-[compprov-plugin-example/samples](https://github.com/compprov/compprov-plugin-example/tree/master/samples/):
+The prompts were evaluated on 116 CPG snapshots, available in
+[compprov-plugin-example/samples](https://github.com/compprov/compprov-plugin-example/tree/master/samples/).
+The complete outputs of all 40 runs (prompts, responses, token usage) are archived on Zenodo:
+*TODO: DOI*.
+
+The corpus:
 
 - 33 benign computations from several domains;
 - 39 synthetic attacks: calculation omission 7, double counting 7, lineage disconnection 9,
@@ -365,7 +369,9 @@ Unless `--workDir` is given, each run gets its own timestamped directory
     └── <prompt>_result.md                  Rendered risk score + derived verdict label + report
 ```
 
-Input and Output samples are available here: https://github.com/compprov/compprov-plugin-example/tree/master/samples/
+Input and output samples are available here: https://github.com/compprov/compprov-plugin-example/tree/master/samples/
+(one complete run and the summaries of all others). The complete outputs of every run are archived
+on Zenodo: *TODO: DOI*.
 
 ## License
 
