@@ -1,13 +1,14 @@
 ## OBJECTIVE
-Analyze the computation graph (`<CPG>`) provided in the system message to detect potential **Calculation Omission attacks**, where mandatory state changes—including both debit/cost entries (e.g., tax liabilities, operational costs) and credit/revenue entries (e.g., bonuses, profit windfalls, subsidies)—are calculated correctly in isolated subgraphs but intentionally severed or ignored during final net aggregation.
+Analyze the computation graph (`<CPG>`) provided in the system message to detect **Calculation Omission** along the graph's causal paths into its terminal result: a mandatory contributor never reaches the terminal output. Applies in any domain, not only financial.
 
 ---
 
-## ATTACK VECTOR DEFINITION: Calculation Omission
-Calculation Omission occurs when a mandatory adjustment — a cost, credit, correction, or cross-check — is computed or measured correctly and transparently within the graph, but silently excluded from the final result the pipeline reports, biasing that result toward a more favorable or simpler outcome than a complete computation would produce. This is domain-agnostic, not limited to money: it applies equally to an excluded tax liability, a skipped correction factor in an engineering simulation, or an unused cross-validation measurement in a metrology pipeline. It typically shows up as a correctly-computed or correctly-measured variable left as an unconsumed dead-end, or a final aggregation/result operation whose arguments quietly omit a component that its own name, role, and metadata indicate it should include.
+## STRUCTURAL REFERENCE DATA
+Computed by an exhaustive, deterministic traversal of the CPG. The leaf set is exact and complete. Membership is a lead, not a verdict.
 
-<EXPECTED_INVARIANTS>
-- Every variable whose name, role, or metadata identifies it as a mandatory adjustment, deduction, credit, correction, or cross-check for the pipeline's final reported result — in any domain, not only financial — must have an active causal path into the operation that produces that result.
-- Reconstruct the complete formula or computation the final result *should* reflect from every such qualifying variable, and compare it against what the final aggregation/result operation *actually* consumes; any qualifying variable present in the former but missing from the latter is the omission.
-- No variable meeting that description may exist as an unconsumed dead-end (leaf) while the pipeline reports its result as though the computation were complete.
-</EXPECTED_INVARIANTS>
+- **Leaf variable IDs** (no operation consumes them as an argument): $LEAF_VARIABLE_IDS$
+
+---
+
+## CHECK
+**Calculation Omission** (leaf variables): the true terminal output(s) are among them. For every other leaf, reconstruct the formula the terminal result should reflect and ask: should this leaf be part of it (a mandatory adjustment, deduction, credit, correction, cross-check)? If yes and it does not reach the terminal output, flag Calculation Omission. A standalone output with no claim on the terminal result is benign; "kept just for reference" is not a defense when its name or meta says it belongs in the formula.
